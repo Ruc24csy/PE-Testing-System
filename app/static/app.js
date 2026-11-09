@@ -194,6 +194,7 @@ function renderClass(C) {
     <div class="toolbar">
       <label><input type="checkbox" id="fMissing"> 仅显示未录入</label>
       <label><input type="checkbox" id="fIssue"> 仅显示异常</label>
+      <label><input type="checkbox" id="fOpt" ${localStorage.getItem("showOpt") === "1" ? "checked" : ""}> 显示学院、专业、上课班级</label>
       <span class="muted small" id="selInfo"></span>
       ${d.editable ? `<select id="batchSlot"><option value="a_status">${esc(lab("a"))}</option><option value="b_status">${esc(lab("b"))}</option></select>
         <select id="batchStatus">${d.statuses.map((s) => `<option>${s}</option>`).join("")}</select><button id="batchBtn">批量置状态</button>` : ""}
@@ -205,10 +206,10 @@ function renderClass(C) {
     </div>
     <div class="muted small">只需填写原始成绩、运动技能评定和平时成绩，其余列自动计算。Enter/Tab 向下，Shift+Tab 向上，Esc 取消输入，Ctrl+Z 撤销；可从 Excel 复制一整列粘贴。点得分可查看计算过程。</div>
   </div>
-  <div class="grid-wrap"><table class="grid" id="grid">
+  <div class="grid-wrap"><table class="grid ${localStorage.getItem("showOpt") === "1" ? "" : "compact"}" id="grid">
     <thead><tr>
       <th rowspan="2" class="sticky"><input type="checkbox" id="selAll" title="全选"></th>
-      <th rowspan="2" class="sticky2">学号</th><th rowspan="2" class="sticky3">姓名</th><th rowspan="2">性别</th><th rowspan="2">学院</th><th rowspan="2">专业</th><th rowspan="2">上课班级</th><th rowspan="2">年级/标准档</th>
+      <th rowspan="2" class="sticky2">学号</th><th rowspan="2" class="sticky3">姓名</th><th rowspan="2">性别</th><th rowspan="2" class="opt">学院</th><th rowspan="2" class="opt">专业</th><th rowspan="2" class="opt">上课班级</th><th rowspan="2">年级/标准档</th>
       ${["a", "b"].map((k) => `<th colspan="4">${esc(itemName(k))}（${wt(k)}%）<span class="qm" data-std="${k}" title="查看评分表与加分规则">?</span></th>`).join("")}
       <th rowspan="2">体测小计</th><th rowspan="2">运动技能<br><span class="small muted">0—${(cfg.skill_weight * 100).toFixed(0)}</span></th><th rowspan="2">平时成绩<br><span class="small muted">0—${(cfg.regular_weight * 100).toFixed(0)}</span></th><th rowspan="2">课程总成绩</th><th rowspan="2"></th>
     </tr><tr>${["a", "b"].map(() => `<th>原始成绩</th><th>状态</th><th>单项得分</th><th>折算分</th>`).join("")}</tr></thead>
@@ -253,7 +254,7 @@ function rowHtml(C, r) {
   };
   const statusCell = (k) => {
     const f = `${k}_status`;
-    return `<td class="in"><select data-e="${r.enrollment_id}" data-f="${f}" ${ed ? "" : "disabled"}>${C.d.statuses.map((s) => `<option ${v[f] === s ? "selected" : ""}>${s === "正常" ? "正常实测" : s}</option>`).join("")}</select></td>`;
+    return `<td class="in st"><select data-e="${r.enrollment_id}" data-f="${f}" ${ed ? "" : "disabled"}>${C.d.statuses.map((s) => `<option ${v[f] === s ? "selected" : ""}>${s === "正常" ? "正常实测" : s}</option>`).join("")}</select></td>`;
   };
   const scoreCells = (k) => {
     const s = r.display[k];
@@ -268,7 +269,7 @@ function rowHtml(C, r) {
   return `<tr data-e="${r.enrollment_id}" class="${r.pending || !r.gender_code ? "pending" : ""} ${C.sel.has(r.enrollment_id) ? "selected" : ""}">
     <td class="sticky lock"><input type="checkbox" class="rowSel" data-e="${r.enrollment_id}" ${C.sel.has(r.enrollment_id) ? "checked" : ""}> ${r.seq}</td>
     <td class="sticky2 lock">${esc(r.student_no)}</td><td class="sticky3 lock">${esc(r.name)}</td><td class="lock">${esc(r.gender)}</td>
-    <td class="lock">${esc(r.college)}</td><td class="lock">${esc(r.major)}</td><td class="lock">${esc(r.class_label)}</td>
+    <td class="lock trunc opt" title="${esc(r.college)}">${esc(r.college)}</td><td class="lock trunc opt" title="${esc(r.major)}">${esc(r.major)}</td><td class="lock trunc opt" title="${esc(r.class_label)}">${esc(r.class_label)}</td>
     <td class="lock">${r.grade_num ? `大${r.grade_num}` : ""} ${esc(r.band_label)} ${flags.join(" ")}</td>
     ${cell("a_raw")}${statusCell("a")}${scoreCells("a")}${cell("b_raw")}${statusCell("b")}${scoreCells("b")}
     <td class="lock num"><b>${fmt(r.subtotal, 2)}</b></td>${cell("skill")}${cell("regular")}
@@ -373,6 +374,7 @@ function bindClass(C) {
     }
   };
   $("#selAll").onchange = (e) => { const ids = $$("#grid .rowSel").map((x) => Number(x.dataset.e)); ids.forEach((id) => (e.target.checked ? C.sel.add(id) : C.sel.delete(id))); renderRows(C); };
+  $("#fOpt").onchange = (e) => { localStorage.setItem("showOpt", e.target.checked ? "1" : "0"); $("#grid").classList.toggle("compact", !e.target.checked); };
   $("#fMissing").onchange = () => renderRows(C); $("#fIssue").onchange = () => renderRows(C);
   const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
   on("#batchBtn", () => {
@@ -602,10 +604,10 @@ async function adPending(el) {
   const draw = () => {
     const q = $("#pSearch").value.trim();
     $("#pBody").innerHTML = d.students.filter((s) => !q || (s.student_no + s.name + s.reasons.join("")).includes(q)).map((s) => `<tr>
-      <td>${esc(s.student_no)}</td><td>${esc(s.name)}</td><td>${esc(s.gender)}</td><td>${s.grade_num ? `大${s.grade_num}，` : ""}${esc(s.band_label)}<div class="muted small">${esc(s.source)}</div></td>
+      <td class="nw">${esc(s.student_no)}</td><td class="nw">${esc(s.name)}</td><td class="nw">${esc(s.gender)}</td><td class="nw">${s.grade_num ? `大${s.grade_num}，` : ""}${esc(s.band_label)}<div class="muted small">${esc(s.source)}</div></td>
       <td>${s.reasons.map((r) => `<div>${esc(r)}</div>`).join("")}</td>
       <td>${s.enrollments.map((e) => `<div>${esc(e.class_name)}（${esc(e.teacher)}）上课年级 ${esc(e.grade_field || "空")}${s.enrollments.length > 1 ? (e.active ? ' <span class="tag">有效</span>' : ' <span class="tag err">已停用</span>') + (e.active && s.enrollments.filter((x) => x.active).length > 1 ? ` <button class="link" data-keep="${e.enrollment_id}" data-no="${s.student_no}">只保留这条</button>` : "") : ""}</div>`).join("")}</td>
-      <td><button class="link" data-fix="${s.student_no}">确认标准档</button></td></tr>`).join("");
+      <td class="nw"><button class="link" data-fix="${s.student_no}">确认标准档</button></td></tr>`).join("");
     $$("[data-fix]", el).forEach((b) => (b.onclick = () => fixDialog(sem, d.students.find((s) => s.student_no === b.dataset.fix), () => adPending(el))));
     $$("[data-keep]", el).forEach((b) => (b.onclick = async () => { await api(`/api/admin/semesters/${sem.id}/students/${b.dataset.no}/keep`, { method: "POST", body: { enrollment_id: Number(b.dataset.keep) } }); toast("已保留"); adPending(el); }));
   };

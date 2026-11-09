@@ -81,3 +81,9 @@ table.grid td.in.ro input{color:#999}
 .kv{display:grid;grid-template-columns:120px 1fr;gap:4px 12px}
 .kv div:nth-child(odd){color:var(--muted)}
 @media (max-width:760px){.topbar{flex-wrap:wrap;height:auto;padding:8px 12px;gap:8px}main{padding:10px}}
+.modal[hidden],.toast[hidden]{display:none}
+table.grid td.trunc{max-width:120px;overflow:hidden;text-overflow:ellipsis}
+table.grid td.in input::placeholder{color:#c9ced6}
+table.list td.nw{white-space:nowrap}
+table.grid.compact .opt{display:none}
+table.grid td.in.st{min-width:0;width:96px}

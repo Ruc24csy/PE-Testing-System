@@ -1,0 +1,65 @@
+# 部署说明（通州云平台 · UOS V20）
+
+服务器：体育部已分配的通州云平台虚拟服务器，SSH 端口 10001，300GB 数据盘需自行分区挂载。Web 只经备案域名、WAF 与防火墙对公网放通 80/443，管理端口只允许堡垒机访问。
+
+## 1. 挂载数据盘
+
+```bash
+lsblk                                   # 找到 300GB 的数据盘，例如 /dev/vdb
+sudo parted /dev/vdb --script mklabel gpt mkpart primary ext4 0% 100%
+sudo mkfs.ext4 /dev/vdb1
+sudo mkdir -p /data
+echo "UUID=$(sudo blkid -s UUID -o value /dev/vdb1) /data ext4 defaults 0 2" | sudo tee -a /etc/fstab
+sudo mount -a && df -h /data
+```
+
+## 2. 安装应用
+
+```bash
+sudo useradd -r -m -d /opt/pe-scores -s /usr/sbin/nologin pe
+sudo -u pe git clone <仓库地址> /opt/pe-scores/app
+cd /opt/pe-scores/app
+sudo -u pe python3 -m venv .venv
+sudo -u pe .venv/bin/pip install -r requirements.txt
+sudo mkdir -p /data/pe-scores && sudo chown pe:pe /data/pe-scores
+```
+
+UOS 自带 Python 3.7 时，先装 3.10 以上版本（`apt install python3.10` 或源码编译）。
+
+## 3. 配置并启动
+
+```bash
+sudo cp deploy/pe-scores.env.example /etc/pe-scores.env   # 按实际填写 CAS 地址、管理员工号
+sudo chown root:pe /etc/pe-scores.env && sudo chmod 640 /etc/pe-scores.env
+sudo cp deploy/pe-scores.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now pe-scores
+sudo -u pe env $(cat /etc/pe-scores.env | xargs) .venv/bin/python scripts/manage.py create-admin <工号> <姓名>
+```
+
+应用只监听 `127.0.0.1:8000`，由 Nginx 对外。
+
+## 4. Nginx 与 HTTPS
+
+```bash
+sudo apt install nginx
+sudo cp deploy/nginx.conf /etc/nginx/conf.d/pe-scores.conf   # 改成备案域名与证书路径
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+80 端口强制跳转 443。证书使用学校统一证书或信息技术中心签发的证书。
+
+## 5. 备份
+
+```bash
+sudo cp deploy/pe-scores-backup.cron /etc/cron.d/pe-scores-backup
+```
+
+每天 02:30 用 SQLite 在线备份到 `/data/pe-scores/backups/`，保留 60 天。建议再定期同步一份到信息技术中心的备份存储。
+
+## 6. 安全清单
+
+- 首次登录修改服务器初始管理口令（≥8位，三类字符）。
+- 防火墙只对公网放通 80、443；SSH 10001 只允许堡垒机来源。
+- `PE_AUTH_MODE=cas`，生产环境禁止使用 `dev`。
+- `PE_HTTPS_ONLY=1`。
+- 数字人大账号等凭据不写进代码仓库和文档，只写在 `/etc/pe-scores.env`。
