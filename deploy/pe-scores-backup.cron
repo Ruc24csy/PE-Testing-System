@@ -1,1 +1,1 @@
-30 2 * * * pe cd /opt/pe-scores/app && env $(cat /etc/pe-scores.env | xargs) .venv/bin/python scripts/manage.py backup >> /data/pe-scores/backup.log 2>&1 && find /data/pe-scores/backups -name '*.db' -mtime +60 -delete
+30 2 * * * pe cd /opt/pe-scores/app && set -a && . /etc/pe-scores.env && set +a && .venv/bin/python scripts/manage.py backup >> /data/pe-scores/backup.log 2>&1 && find /data/pe-scores/backups -name '*.db' -mtime +60 -delete

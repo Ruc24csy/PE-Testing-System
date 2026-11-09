@@ -2,6 +2,19 @@
 
 服务器：体育部已分配的通州云平台虚拟服务器，SSH 端口 10001，300GB 数据盘需自行分区挂载。Web 只经备案域名、WAF 与防火墙对公网放通 80/443，管理端口只允许堡垒机访问。
 
+## 一键安装（推荐）
+
+从堡垒机登录服务器后，以 root 执行：
+
+```bash
+git clone <仓库地址> /root/pe-scores && cd /root/pe-scores
+bash deploy/install.sh --domain <备案域名> --data-disk /dev/vdb --admin <工号>:<姓名>
+```
+
+脚本会挂载数据盘、用 uv 装 Python 3.12（UOS V20 自带的 Python 版本过低）、装依赖、写配置、起 systemd 服务和 Nginx、配每日备份，并打印应急管理员的初始口令。可以重复执行；以后更新代码时 `git pull` 后再执行一次即可。数据盘已挂载过的，去掉 `--data-disk`。
+
+下面是脚本做的每一步，需要手工排查时参考。
+
 ## 1. 挂载数据盘
 
 ```bash
@@ -29,7 +42,7 @@ UOS 自带 Python 3.7 时，先装 3.10 以上版本（`apt install python3.10` 
 ## 3. 配置并启动
 
 ```bash
-sudo cp deploy/pe-scores.env.example /etc/pe-scores.env   # 按实际填写 CAS 地址、管理员工号
+sudo cp deploy/pe-scores.env.example /etc/pe-scores.env   # 按实际填写回调地址、secret、管理员工号
 sudo chown root:pe /etc/pe-scores.env && sudo chmod 640 /etc/pe-scores.env
 sudo cp deploy/pe-scores.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now pe-scores
@@ -60,6 +73,6 @@ sudo cp deploy/pe-scores-backup.cron /etc/cron.d/pe-scores-backup
 
 - 首次登录修改服务器初始管理口令（≥8位，三类字符）。
 - 防火墙只对公网放通 80、443；SSH 10001 只允许堡垒机来源。
-- `PE_AUTH_MODE=cas`，生产环境禁止使用 `dev`。
+- 统一认证启用前 `PE_AUTH_MODE=local`；填好 `PE_SSO_CLIENT_SECRET` 后改为 `sso`。生产环境禁止使用 `dev`。
+- 数字人大账号、appid 的 secret 等凭据不写进代码仓库和文档，只写在 `/etc/pe-scores.env`。
 - `PE_HTTPS_ONLY=1`。
-- 数字人大账号等凭据不写进代码仓库和文档，只写在 `/etc/pe-scores.env`。
