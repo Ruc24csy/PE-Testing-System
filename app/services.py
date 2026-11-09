@@ -229,11 +229,12 @@ def save_cells(db: Session, c: TeachingClass, sem: Semester, changes: list[dict]
         if field in ("a_status", "b_status") and val is None:
             val = "正常"
         raw_field = field.replace("_status", "_raw")
-        if field in ("a_raw", "b_raw") and val is not None and rec and getattr(rec, field[0] + "_status") != "正常":
+        if field in ("a_raw", "b_raw") and val is not None and rec and (getattr(rec, field[0] + "_status") or "正常") != "正常":
             results.append({**ch, "ok": False, "error": "该项已选择特殊状态，数值与状态互斥；请先把状态改回“正常实测”"})
             continue
         if rec is None:
-            rec = ScoreRecord(enrollment_id=e.id, standard_version=sem.standard_version, computed={})
+            rec = ScoreRecord(enrollment_id=e.id, standard_version=sem.standard_version, computed={},
+                              a_status="正常", b_status="正常")
             db.add(rec)
             recs[e.id] = rec
         old = getattr(rec, field)

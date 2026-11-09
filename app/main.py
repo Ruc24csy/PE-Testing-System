@@ -5,6 +5,7 @@ import io
 import re
 import uuid
 from collections import Counter
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
@@ -24,7 +25,13 @@ from .models import (AuditLog, Enrollment, GradeCorrection, ScoreHistory, ScoreR
 STATIC = Path(__file__).parent / "static"
 WEEKDAYS = {"星期一": 1, "星期二": 2, "星期三": 3, "星期四": 4, "星期五": 5, "星期六": 6, "星期日": 7, "星期天": 7}
 
-app = FastAPI(title="体育成绩录入平台", docs_url=None, redoc_url=None, openapi_url=None)
+@asynccontextmanager
+async def lifespan(_app):
+    init_db()
+    yield
+
+
+app = FastAPI(title="体育成绩录入平台", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=config.SECRET_KEY, session_cookie="pe_session",
                    max_age=8 * 3600, same_site="lax", https_only=config.HTTPS_ONLY)
 
@@ -40,11 +47,6 @@ async def security_headers(request: Request, call_next):
     if request.url.path.startswith("/api/"):
         resp.headers.setdefault("Cache-Control", "no-store")
     return resp
-
-
-@app.on_event("startup")
-def _startup():
-    init_db()
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
