@@ -42,7 +42,7 @@ UOS 自带 Python 3.7 时，先装 3.10 以上版本（`apt install python3.10` 
 ## 3. 配置并启动
 
 ```bash
-sudo cp deploy/pe-scores.env.example /etc/pe-scores.env   # 按实际填写 CAS 地址、管理员工号
+sudo cp deploy/pe-scores.env.example /etc/pe-scores.env   # 按实际填写回调地址、secret、管理员工号
 sudo chown root:pe /etc/pe-scores.env && sudo chmod 640 /etc/pe-scores.env
 sudo cp deploy/pe-scores.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now pe-scores
@@ -73,6 +73,6 @@ sudo cp deploy/pe-scores-backup.cron /etc/cron.d/pe-scores-backup
 
 - 首次登录修改服务器初始管理口令（≥8位，三类字符）。
 - 防火墙只对公网放通 80、443；SSH 10001 只允许堡垒机来源。
-- 统一认证批下来前 `PE_AUTH_MODE=local`，批下来后改为 `cas`；生产环境禁止使用 `dev`。
+- 统一认证启用前 `PE_AUTH_MODE=local`；填好 `PE_SSO_CLIENT_SECRET` 后改为 `sso`。生产环境禁止使用 `dev`。
+- 数字人大账号、appid 的 secret 等凭据不写进代码仓库和文档，只写在 `/etc/pe-scores.env`。
 - `PE_HTTPS_ONLY=1`。
-- 数字人大账号等凭据不写进代码仓库和文档，只写在 `/etc/pe-scores.env`。

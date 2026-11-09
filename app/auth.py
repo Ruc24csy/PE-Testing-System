@@ -5,7 +5,6 @@ import hashlib
 import hmac
 import os
 import re
-import xml.etree.ElementTree as ET
 from datetime import timedelta
 from urllib.parse import urlencode
 
@@ -103,32 +102,77 @@ def password_ok(pw: str) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------- CAS
+# ---------------------------------------------------------------- 统一身份认证（OAuth2.0）
+# 学校提供的是 CAS 服务器上的 OAuth2.0 接口：
+#   authorize → 用户登录后带 ?code=..&state=.. 回到 redirect_uri
+#   accessToken（POST 表单）→ access_token
+#   user/profiles?access_token=..（查询参数，不是 Bearer 头）→ 身份信息
+# 实测响应：{"loginName": "工号/学号", "name": "...", "categoryName": "教职工/学生", "accounts": [...]}
 
-def cas_login_url() -> str:
-    return f"{config.CAS_SERVER_URL.rstrip('/')}/login?" + urlencode({"service": config.CAS_SERVICE_URL})
+class SSOError(Exception):
+    pass
 
 
-def cas_validate(ticket: str) -> tuple[str, str] | None:
-    """CAS 2.0/3.0 serviceValidate，返回 (工号, 姓名)。"""
-    url = f"{config.CAS_SERVER_URL.rstrip('/')}/serviceValidate"
-    r = httpx.get(url, params={"service": config.CAS_SERVICE_URL, "ticket": ticket}, timeout=10)
-    r.raise_for_status()
-    root = ET.fromstring(r.text)
-    ns = {"cas": "http://www.yale.edu/tp/cas"}
-    ok = root.find("cas:authenticationSuccess", ns)
-    if ok is None:
-        return None
-    user = (ok.findtext("cas:user", default="", namespaces=ns) or "").strip()
-    name = ""
-    attrs = ok.find("cas:attributes", ns)
-    if attrs is not None:
-        for key in ("name", "cn", "displayName", "xm", "userName"):
-            v = attrs.findtext(f"cas:{key}", default="", namespaces=ns)
-            if v:
-                name = v.strip()
-                break
-    return (user, name) if user else None
+def sso_login_url(state: str) -> str:
+    return f"{config.SSO_AUTHORIZE_URL}?" + urlencode({
+        "response_type": "code", "client_id": config.SSO_CLIENT_ID,
+        "redirect_uri": config.SSO_REDIRECT_URI, "scope": "all", "state": state})
+
+
+def _parse_token(raw: str) -> dict:
+    import json
+    from urllib.parse import parse_qs
+    try:
+        body = json.loads(raw)
+        if isinstance(body, dict):
+            return body
+    except ValueError:
+        pass
+    return {k: v[0] for k, v in parse_qs(raw).items()}
+
+
+def _flatten(info: dict) -> dict:
+    for key in ("data", "attributes", "user", "result"):
+        inner = info.get(key)
+        if isinstance(inner, dict):
+            return {**info, **inner}
+        if isinstance(inner, list) and inner and isinstance(inner[0], dict):
+            return {**info, **inner[0]}
+    return info
+
+
+def _pick(d: dict, *names) -> str:
+    for n in names:
+        v = d.get(n)
+        if v not in (None, ""):
+            return str(v).strip()
+    return ""
+
+
+def sso_exchange(code: str) -> dict:
+    """用授权码换身份，返回 {"staff_no", "name", "category"}。"""
+    r = httpx.post(config.SSO_TOKEN_URL, data={
+        "grant_type": "authorization_code", "code": code, "client_id": config.SSO_CLIENT_ID,
+        "client_secret": config.SSO_CLIENT_SECRET, "redirect_uri": config.SSO_REDIRECT_URI}, timeout=10)
+    token = _pick(_parse_token(r.text), "access_token", "accessToken")
+    if not token:
+        raise SSOError(f"未换到 access_token：{r.text[:200]}")
+    r = httpx.get(config.SSO_USER_INFO_URL, params={"access_token": token}, timeout=10)
+    try:
+        info = r.json()
+    except ValueError:
+        raise SSOError(f"统一身份认证返回的不是 JSON：{r.text[:200]}")
+    if not isinstance(info, dict):
+        raise SSOError("统一身份认证返回结构异常")
+    info = _flatten(info)
+    staff_no = _pick(info, "loginName")
+    if not staff_no:
+        raise SSOError("统一身份认证没有返回工号")
+    accounts = [a for a in (info.get("accounts") or []) if isinstance(a, dict)]
+    acct = next((a for a in accounts if _pick(a, "loginName") == staff_no), None) or \
+        next((a for a in accounts if a.get("isMainOrg")), None) or (accounts[0] if accounts else {})
+    return {"staff_no": staff_no, "name": _pick(info, "name"),
+            "category": _pick(acct, "categoryName") or _pick(info, "categoryName")}
 
 
 def ensure_user(db: Session, staff_no: str, name: str = "") -> User:

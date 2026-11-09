@@ -53,7 +53,14 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
 @app.get("/")
-def index():
+def index(request: Request, code: str = "", state: str = ""):
+    # 应用中心登记的回调地址可以是站点根路径：学校把 ?code=..&state=.. 接在后面
+    if config.AUTH_MODE == "sso" and code and state:
+        db = next(get_db())
+        try:
+            return sso_callback(request, code, state, db)
+        finally:
+            db.close()
     return FileResponse(STATIC / "index.html")
 
 
@@ -61,34 +68,46 @@ def index():
 
 @app.get("/api/auth/mode")
 def auth_mode():
-    return {"mode": config.AUTH_MODE, "cas": bool(config.CAS_SERVER_URL)}
+    return {"mode": config.AUTH_MODE}
 
 
 @app.get("/auth/login")
-def login_redirect():
-    if config.AUTH_MODE == "cas" and config.CAS_SERVER_URL:
-        return RedirectResponse(auth.cas_login_url())
-    return RedirectResponse("/#/login")
+def login_redirect(request: Request):
+    if config.AUTH_MODE != "sso":
+        return RedirectResponse("/#/login")
+    import secrets
+    state = secrets.token_urlsafe(24)
+    # state 存在签名会话里：只有发起登录的这个浏览器能完成回调（防登录 CSRF），一次一用
+    request.session["sso_state"] = state
+    return RedirectResponse(auth.sso_login_url(state))
 
 
-@app.get("/auth/cas/callback")
-def cas_callback(request: Request, ticket: str = "", db: Session = Depends(get_db)):
-    if config.AUTH_MODE != "cas":
+@app.get("/auth/sso/callback")
+def sso_callback(request: Request, code: str = "", state: str = "", db: Session = Depends(get_db)):
+    if config.AUTH_MODE != "sso":
         raise HTTPException(404)
     ip = client_ip(request)
+    expected = request.session.pop("sso_state", None)
+    if not code or not state or not expected or state != expected:
+        return RedirectResponse("/#/login?error=expired")
     try:
-        res = auth.cas_validate(ticket)
+        ident = auth.sso_exchange(code)
+    except auth.SSOError as e:
+        services.log(db, "sso", "登录失败", ip=ip, reason=str(e)[:200])
+        db.commit()
+        return RedirectResponse("/#/login?error=sso")
     except Exception:
-        raise HTTPException(502, "统一身份认证服务暂时不可用，请稍后再试")
-    if not res:
-        auth.record_attempt(db, "cas", ip, False)
-        return RedirectResponse("/#/login?error=cas")
-    staff_no, name = res
-    u = auth.ensure_user(db, staff_no, name)
-    auth.record_attempt(db, staff_no, ip, True)
+        return RedirectResponse("/#/login?error=unavailable")
+    u = db.get(User, ident["staff_no"])
+    if not (u and is_admin(u)) and ident["staff_no"] not in config.ADMIN_STAFF_NOS \
+            and ident["category"] not in config.SSO_ALLOWED_CATEGORIES:
+        auth.record_attempt(db, ident["staff_no"], ip, False)
+        return RedirectResponse("/#/login?error=category")
+    u = auth.ensure_user(db, ident["staff_no"], ident["name"])
+    auth.record_attempt(db, u.staff_no, ip, True)
     request.session.clear()
     request.session["staff_no"] = u.staff_no
-    services.log(db, u.staff_no, "登录", ip=ip, method="cas")
+    services.log(db, u.staff_no, "登录", ip=ip, method="sso")
     db.commit()
     return RedirectResponse("/")
 
@@ -113,7 +132,7 @@ def local_login(request: Request, staff_no: str = Body(...), password: str = Bod
     if auth.locked(db, staff_no):
         raise HTTPException(429, f"连续登录失败次数过多，账号已锁定{config.LOGIN_LOCK_MINUTES}分钟")
     u = db.get(User, staff_no)
-    if u and config.AUTH_MODE == "cas" and not is_admin(u):
+    if u and config.AUTH_MODE == "sso" and not is_admin(u):
         u = None  # 接入统一认证后，本地口令只留给应急管理员
     if not u or not auth.verify_password(password, u.password_hash):
         auth.record_attempt(db, staff_no, ip, False)
@@ -129,8 +148,7 @@ def local_login(request: Request, staff_no: str = Body(...), password: str = Bod
 @app.post("/auth/logout")
 def logout(request: Request):
     request.session.clear()
-    return {"ok": True, "redirect": (f"{config.CAS_SERVER_URL.rstrip('/')}/logout"
-                                     if config.AUTH_MODE == "cas" and config.CAS_SERVER_URL else "/")}
+    return {"ok": True, "redirect": config.SSO_LOGOUT_URL if config.AUTH_MODE == "sso" else "/"}
 
 
 @app.get("/api/me")

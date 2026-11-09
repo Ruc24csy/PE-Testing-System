@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 体育成绩录入平台一键安装（UOS V20 / Debian 系，root 执行）。可重复执行。
 #
-#   sudo bash deploy/install.sh --domain pe.example.edu.cn [--data-disk /dev/vdb] [--admin 工号:姓名]
+#   sudo bash deploy/install.sh --domain tykcjlr.ruc.edu.cn [--data-disk /dev/vdb] [--admin 工号:姓名]
 #
 # 做的事：挂载数据盘（可选）→ 建运行用户 → 用 uv 装 Python 3.12 与依赖 → 写配置
 #        → systemd 服务 → Nginx（80 跳 443）→ 每日备份 → 应急管理员（可选）。
@@ -57,7 +57,7 @@ step "写配置 $ENV_FILE"
 if [[ ! -f "$ENV_FILE" ]]; then
   sed -e "s#pe.example.edu.cn#$DOMAIN#g" "$APP_DIR/deploy/pe-scores.env.example" > "$ENV_FILE"
   echo "PE_SECRET_KEY=$(head -c 48 /dev/urandom | base64 | tr -d '\n/+=')" >> "$ENV_FILE"
-  echo "  已生成配置（临时口令登录 local 模式）；统一认证批下来后把 $ENV_FILE 里的 PE_AUTH_MODE 改成 cas、填好两个 CAS 地址，再 systemctl restart pe-scores"
+  echo "  已生成配置（临时口令登录 local 模式）；拿到 secret 后在 $ENV_FILE 里填 PE_SSO_CLIENT_SECRET、把 PE_AUTH_MODE 改成 sso，再 systemctl restart pe-scores"
 fi
 chown root:pe "$ENV_FILE"; chmod 640 "$ENV_FILE"
 

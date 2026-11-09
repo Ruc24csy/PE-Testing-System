@@ -23,11 +23,31 @@ def _secret() -> str:
 
 SECRET_KEY = _secret()
 
-# 登录方式：cas = 数字人大统一身份认证；local = 工号＋平台口令（统一认证接入前临时使用）；
-# dev = 开发测试登录（输入工号即可，禁止用于生产）
+# 登录方式：sso = 数字人大统一身份认证（学校 CAS 服务器上的 OAuth2.0 接口）；
+# local = 工号＋平台口令（统一认证接入前临时使用）；dev = 输入工号即可登录（仅限开发，禁止用于生产）
 AUTH_MODE = os.getenv("PE_AUTH_MODE", "dev")
-CAS_SERVER_URL = os.getenv("PE_CAS_SERVER_URL", "")  # 例如 https://cas.example.edu.cn/cas
-CAS_SERVICE_URL = os.getenv("PE_CAS_SERVICE_URL", "")  # 本平台回调地址，例如 https://pe.example.edu.cn/auth/cas/callback
+if AUTH_MODE == "cas":  # 旧写法
+    AUTH_MODE = "sso"
+SSO_BASE_URL = os.getenv("PE_SSO_BASE_URL", "https://cas.ruc.edu.cn/cas")
+SSO_AUTHORIZE_URL = os.getenv("PE_SSO_AUTHORIZE_URL") or f"{SSO_BASE_URL.rstrip('/')}/oauth2.0/authorize"
+SSO_TOKEN_URL = os.getenv("PE_SSO_TOKEN_URL") or f"{SSO_BASE_URL.rstrip('/')}/oauth2.0/accessToken"
+SSO_USER_INFO_URL = os.getenv("PE_SSO_USER_INFO_URL") or f"{SSO_BASE_URL.rstrip('/')}/oauth2.0/user/profiles"
+SSO_LOGOUT_URL = os.getenv("PE_SSO_LOGOUT_URL") or f"{SSO_BASE_URL.rstrip('/')}/logout"
+SSO_CLIENT_ID = os.getenv("PE_SSO_CLIENT_ID", "")  # 学校应用中心注册后获得的 appid
+SSO_CLIENT_SECRET = os.getenv("PE_SSO_CLIENT_SECRET", "")
+# 回调地址，必须与应用中心登记的一字不差（明文，不要预先 URL 编码），例如 https://域名/auth/sso/callback
+SSO_REDIRECT_URI = os.getenv("PE_SSO_REDIRECT_URI", "")
+# 允许登录的人员类别（学校返回的 categoryName），逗号分隔；管理员不受限
+SSO_ALLOWED_CATEGORIES = {s.strip() for s in os.getenv("PE_SSO_ALLOWED_CATEGORIES", "教职工").split(",") if s.strip()}
+
+if AUTH_MODE == "sso":
+    _missing = [k for k, v in (("PE_SSO_CLIENT_ID", SSO_CLIENT_ID), ("PE_SSO_CLIENT_SECRET", SSO_CLIENT_SECRET),
+                               ("PE_SSO_REDIRECT_URI", SSO_REDIRECT_URI)) if not v]
+    if _missing:
+        raise RuntimeError(f"PE_AUTH_MODE=sso 但缺少配置：{'、'.join(_missing)}")
+elif AUTH_MODE not in ("local", "dev"):
+    raise RuntimeError(f"未知的 PE_AUTH_MODE：{AUTH_MODE}")
+
 # 体育部管理员工号，逗号分隔；也可在管理端“账号”里维护
 ADMIN_STAFF_NOS = {s.strip() for s in os.getenv("PE_ADMIN_STAFF_NOS", "").split(",") if s.strip()}
 
