@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>体育成绩录入平台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><a href="#/">体育成绩录入平台</a></div>
+  <div class="semester-picker" id="semPicker" hidden>
+    <label>学期 <select id="semSelect"></select></label>
+  </div>
+  <nav id="nav"></nav>
+  <div class="user" id="userBox"></div>
+</header>
+<main id="app"><div class="loading">加载中…</div></main>
+<div id="modal" class="modal" hidden><div class="modal-box"><button class="modal-close" aria-label="关闭">×</button><div class="modal-body"></div></div></div>
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
