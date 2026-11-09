@@ -2,6 +2,19 @@
 
 服务器：体育部已分配的通州云平台虚拟服务器，SSH 端口 10001，300GB 数据盘需自行分区挂载。Web 只经备案域名、WAF 与防火墙对公网放通 80/443，管理端口只允许堡垒机访问。
 
+## 一键安装（推荐）
+
+从堡垒机登录服务器后，以 root 执行：
+
+```bash
+git clone <仓库地址> /root/pe-scores && cd /root/pe-scores
+bash deploy/install.sh --domain <备案域名> --data-disk /dev/vdb --admin <工号>:<姓名>
+```
+
+脚本会挂载数据盘、用 uv 装 Python 3.12（UOS V20 自带的 Python 版本过低）、装依赖、写配置、起 systemd 服务和 Nginx、配每日备份，并打印应急管理员的初始口令。可以重复执行；以后更新代码时 `git pull` 后再执行一次即可。数据盘已挂载过的，去掉 `--data-disk`。
+
+下面是脚本做的每一步，需要手工排查时参考。
+
 ## 1. 挂载数据盘
 
 ```bash
