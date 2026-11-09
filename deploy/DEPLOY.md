@@ -73,6 +73,6 @@ sudo cp deploy/pe-scores-backup.cron /etc/cron.d/pe-scores-backup
 
 - 首次登录修改服务器初始管理口令（≥8位，三类字符）。
 - 防火墙只对公网放通 80、443；SSH 10001 只允许堡垒机来源。
-- `PE_AUTH_MODE=cas`，生产环境禁止使用 `dev`。
+- 统一认证批下来前 `PE_AUTH_MODE=local`，批下来后改为 `cas`；生产环境禁止使用 `dev`。
 - `PE_HTTPS_ONLY=1`。
 - 数字人大账号等凭据不写进代码仓库和文档，只写在 `/etc/pe-scores.env`。

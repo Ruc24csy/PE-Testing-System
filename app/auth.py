@@ -83,6 +83,16 @@ def verify_password(pw: str, stored: str | None) -> bool:
     return hmac.compare_digest(calc.hex(), dk)
 
 
+def gen_password(length: int = 10) -> str:
+    """随机初始口令：满足复杂度要求，去掉易混淆字符，便于抄写。"""
+    import secrets
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+    while True:
+        pw = "".join(secrets.choice(alphabet) for _ in range(length - 1)) + secrets.choice("#@%+")
+        if password_ok(pw) is None:
+            return pw
+
+
 def password_ok(pw: str) -> str | None:
     """长度不少于8位，且包含数字、大写、小写、特殊字符中的至少三类。"""
     if len(pw) < 8:

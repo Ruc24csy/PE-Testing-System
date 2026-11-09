@@ -23,7 +23,8 @@ def _secret() -> str:
 
 SECRET_KEY = _secret()
 
-# 登录方式：cas = 数字人大统一身份认证；dev = 开发测试登录（输入工号即可，禁止用于生产）
+# 登录方式：cas = 数字人大统一身份认证；local = 工号＋平台口令（统一认证接入前临时使用）；
+# dev = 开发测试登录（输入工号即可，禁止用于生产）
 AUTH_MODE = os.getenv("PE_AUTH_MODE", "dev")
 CAS_SERVER_URL = os.getenv("PE_CAS_SERVER_URL", "")  # 例如 https://cas.example.edu.cn/cas
 CAS_SERVICE_URL = os.getenv("PE_CAS_SERVICE_URL", "")  # 本平台回调地址，例如 https://pe.example.edu.cn/auth/cas/callback

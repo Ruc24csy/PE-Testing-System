@@ -7,9 +7,6 @@
                                                         命令行一次导入三张表（自动建学期、按覆盖方式）
   python scripts/manage.py backup                       备份数据库到 data/backups/
 """
-import secrets
-import shutil
-import string
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -29,11 +26,7 @@ def cmd_init():
 
 def cmd_create_admin(staff_no, name):
     init_db()
-    alphabet = string.ascii_letters + string.digits + "#@%+"
-    while True:
-        pw = "".join(secrets.choice(alphabet) for _ in range(12))
-        if not auth.password_ok(pw):
-            break
+    pw = auth.gen_password(12)
     db = SessionLocal()
     u = db.get(User, staff_no) or User(staff_no=staff_no)
     u.name, u.is_admin = name, True

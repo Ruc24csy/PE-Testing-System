@@ -46,7 +46,7 @@ PE_ADMIN_STAFF_NOS=admin .venv/bin/uvicorn app.main:app --port 8000
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
-| `PE_AUTH_MODE` | `cas`＝数字人大统一身份认证；`dev`＝输入工号即登录，仅限开发 | `dev` |
+| `PE_AUTH_MODE` | `cas`＝数字人大统一身份认证；`local`＝工号＋平台口令（统一认证接入前临时使用，口令由体育部在“账号”页批量生成发放）；`dev`＝输入工号即登录，仅限开发 | `dev` |
 | `PE_CAS_SERVER_URL` | 统一身份认证 CAS 地址，如 `https://cas.example.edu.cn/cas` | 空 |
 | `PE_CAS_SERVICE_URL` | 本平台回调地址，如 `https://域名/auth/cas/callback` | 空 |
 | `PE_ADMIN_STAFF_NOS` | 体育部管理员工号，逗号分隔（也可在管理端设置） | 空 |
@@ -56,6 +56,8 @@ PE_ADMIN_STAFF_NOS=admin .venv/bin/uvicorn app.main:app --port 8000
 | `PE_HTTPS_ONLY` | 设为 `1` 时会话 Cookie 只走 HTTPS 并发送 HSTS | `0` |
 
 统一身份认证按标准 CAS 协议对接（`/login` 跳转、`/serviceValidate` 校验，工号取 `cas:user`）。数字人大应用审批通过、拿到 CAS 地址后设置上面三项即可；如果数字人大给的是 OAuth2 等其他协议，需要在 `app/auth.py` 补一个对应的回调。
+
+统一认证接入前用 `local` 模式：体育部管理员在“体育部管理 → 账号”为本学期全部任课教师一键生成初始口令，下载表格分发；教师首次登录须修改。切换到 `cas` 后，本地口令只对管理员有效。
 
 应急管理员（统一认证不可用时使用本地口令）：
 

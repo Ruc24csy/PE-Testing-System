@@ -33,9 +33,10 @@ function closeModal() { $("#modal").hidden = true; }
 $("#modal .modal-close").onclick = closeModal;
 $("#modal").addEventListener("mousedown", (e) => { if (e.target.id === "modal") closeModal(); });
 
-async function download(path) {
+async function download(path, body) {
   try {
-    const r = await fetch(path, { credentials: "same-origin" });
+    const r = await fetch(path, body === undefined ? { credentials: "same-origin" } :
+      { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "下载失败"); }
     const cd = r.headers.get("content-disposition") || "";
     const m = cd.match(/filename\*=UTF-8''([^;]+)/);
@@ -88,17 +89,19 @@ async function viewLogin() {
   const mode = await api("/api/auth/mode");
   const err = location.hash.includes("error=cas") ? `<div class="notice err">统一身份认证未通过，请重试。</div>` : "";
   $("#app").innerHTML = `<div class="login"><div class="card"><h2>登录</h2>${err}
-    ${mode.mode === "cas" ? `<p>使用数字人大统一身份认证（职工号与密码）登录。</p><a class="btn primary" href="/auth/login">统一身份认证登录</a>` :
-      `<div class="notice info">当前为开发测试模式：输入工号即可登录。正式部署时改为数字人大统一身份认证。</div>
-       <label>工号<input type="text" id="devNo" autofocus></label><button class="primary" id="devBtn">登录</button>`}
-    <details style="margin-top:18px"><summary class="muted small">应急管理员登录</summary>
+    ${mode.mode === "cas" ? `<p>使用数字人大统一身份认证（职工号与密码）登录。</p><a class="btn primary" href="/auth/login">统一身份认证登录</a>` : ""}
+    ${mode.mode === "dev" ? `<div class="notice info">当前为开发测试模式：输入工号即可登录。正式部署时改为数字人大统一身份认证。</div>
+       <label>工号<input type="text" id="devNo" autofocus></label><button class="primary" id="devBtn">登录</button>` : ""}
+    ${mode.mode === "local" ? `<p class="muted small">请使用体育部发放的工号和口令登录，首次登录须修改口令。</p>` : ""}
+    ${mode.mode === "local" ? "<div>" : `<details style="margin-top:18px"><summary class="muted small">应急管理员登录</summary>`}
       <label>工号<input type="text" id="locNo"></label><label>口令<input type="password" id="locPw"></label>
-      <button id="locBtn">登录</button></details></div></div>`;
+      <button id="locBtn" class="${mode.mode === "local" ? "primary" : ""}">登录</button>${mode.mode === "local" ? "</div>" : "</details>"}</div></div>`;
   const done = async () => { state.me = null; state.semesters = []; location.hash = "#/"; };
   if ($("#devBtn")) {
     const go = async () => { try { await api("/api/auth/dev-login", { method: "POST", body: { staff_no: $("#devNo").value } }); done(); } catch (e) { toast(e.message, true); } };
     $("#devBtn").onclick = go; $("#devNo").onkeydown = (e) => e.key === "Enter" && go();
   }
+  $("#locPw").onkeydown = (e) => e.key === "Enter" && $("#locBtn").click();
   $("#locBtn").onclick = async () => {
     try { await api("/api/auth/local-login", { method: "POST", body: { staff_no: $("#locNo").value, password: $("#locPw").value } }); done(); }
     catch (e) { toast(e.message, true); }
@@ -653,12 +656,25 @@ async function adLogs(el, page = 1) {
 }
 async function adUsers(el) {
   const us = await api("/api/admin/users");
-  el.innerHTML = `<div class="row"><input type="text" id="uNo" placeholder="工号"><button id="uAdd">设为管理员</button></div>
-    <table class="list" style="margin-top:10px"><tr><th>工号</th><th>姓名</th><th>角色</th><th></th></tr>${us.map((u) => `<tr><td>${esc(u.staff_no)}</td><td>${esc(u.name)}</td><td>${u.is_admin ? "体育部管理员" : "教师"}</td><td>${u.is_admin ? `<button class="link" data-rm="${esc(u.staff_no)}">取消管理员</button>` : `<button class="link" data-add="${esc(u.staff_no)}">设为管理员</button>`}</td></tr>`).join("")}</table>`;
+  const sem = curSem();
+  el.innerHTML = `<h3>教师口令（统一认证接入前使用）</h3>
+    <p class="muted small">为本学期全部任课教师中还没有口令的账号生成初始口令，并下载成表格分发给教师；教师首次登录须修改。口令只在这份表格里出现一次，请妥善保管。</p>
+    <div class="row"><button class="primary" id="pwGen" ${sem ? "" : "disabled"}>为${sem ? esc(sem.name) : "本学期"}任课教师生成口令</button></div>
+    <h3>账号</h3>
+    <div class="row"><input type="text" id="uNo" placeholder="工号"><button id="uAdd">设为管理员</button></div>
+    <table class="list" style="margin-top:10px"><tr><th>工号</th><th>姓名</th><th>角色</th><th>口令</th><th></th></tr>${us.map((u) => `<tr><td>${esc(u.staff_no)}</td><td>${esc(u.name)}</td><td>${u.is_admin ? "体育部管理员" : "教师"}</td>
+      <td>${u.has_password ? (u.must_change_password ? "已发放，未修改" : "已设置") : '<span class="muted">未发放</span>'}</td>
+      <td>${u.is_admin ? `<button class="link" data-rm="${esc(u.staff_no)}">取消管理员</button>` : `<button class="link" data-add="${esc(u.staff_no)}">设为管理员</button>`}
+      <button class="link" data-reset="${esc(u.staff_no)}">${u.has_password ? "重置口令" : "生成口令"}</button></td></tr>`).join("")}</table>`;
   const set = async (no, v) => { try { await api(`/api/admin/users/${encodeURIComponent(no)}`, { method: "POST", body: { is_admin: v } }); adUsers(el); } catch (e) { toast(e.message, true); } };
   $("#uAdd").onclick = () => set($("#uNo").value.trim(), true);
   $$("[data-rm]", el).forEach((b) => (b.onclick = () => set(b.dataset.rm, false)));
   $$("[data-add]", el).forEach((b) => (b.onclick = () => set(b.dataset.add, true)));
+  $("#pwGen").onclick = async () => { await download("/api/admin/users/passwords", { semester_id: sem.id }); adUsers(el); };
+  $$("[data-reset]", el).forEach((b) => (b.onclick = async () => {
+    if (!confirm(`为 ${b.dataset.reset} 生成新的初始口令？原口令将失效。`)) return;
+    await download("/api/admin/users/passwords", { staff_nos: [b.dataset.reset] }); adUsers(el);
+  }));
 }
 
 route();

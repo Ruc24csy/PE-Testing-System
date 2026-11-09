@@ -232,3 +232,25 @@ def test_local_login_lockout(admin):
     for _ in range(5):
         assert bad.post("/api/auth/local-login", json={"staff_no": "root", "password": "x"}).status_code == 401
     assert bad.post("/api/auth/local-login", json={"staff_no": "root", "password": "NewPass#2026"}).status_code == 429
+
+
+def test_issue_teacher_passwords(admin):
+    sid = admin.get("/api/semesters").json()
+    sid = next(s["id"] for s in sid if s["code"] == "2026-2027-1")
+    r = admin.post("/api/admin/users/passwords", json={"semester_id": sid})
+    assert r.status_code == 200
+    ws = openpyxl.load_workbook(io.BytesIO(r.content)).active
+    rows = {row[0]: row[2] for row in ws.iter_rows(min_row=2, values_only=True)}
+    assert "T001" in rows and len(rows["T001"]) == 10
+    # 已有口令的不重复生成
+    assert admin.post("/api/admin/users/passwords", json={"semester_id": sid}).status_code == 400
+    t = TestClient(app)
+    assert t.post("/api/auth/local-login", json={"staff_no": "T001", "password": rows["T001"]}).json()["must_change_password"]
+    assert t.get(f"/api/semesters/{sid}/classes").status_code == 403
+    assert t.post("/api/me/password", json={"old": rows["T001"], "new": "Teacher#2026"}).status_code == 200
+    assert len(t.get(f"/api/semesters/{sid}/classes").json()["classes"]) == 1
+    # 重置
+    r = admin.post("/api/admin/users/passwords", json={"staff_nos": ["T001"]})
+    ws = openpyxl.load_workbook(io.BytesIO(r.content)).active
+    assert ws.cell(2, 1).value == "T001"
+    assert TestClient(app).post("/api/auth/local-login", json={"staff_no": "T001", "password": "Teacher#2026"}).status_code == 401

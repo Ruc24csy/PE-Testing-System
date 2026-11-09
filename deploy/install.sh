@@ -57,7 +57,7 @@ step "写配置 $ENV_FILE"
 if [[ ! -f "$ENV_FILE" ]]; then
   sed -e "s#pe.example.edu.cn#$DOMAIN#g" "$APP_DIR/deploy/pe-scores.env.example" > "$ENV_FILE"
   echo "PE_SECRET_KEY=$(head -c 48 /dev/urandom | base64 | tr -d '\n/+=')" >> "$ENV_FILE"
-  echo "  已生成配置；统一认证地址下来后编辑 $ENV_FILE 里的 PE_CAS_SERVER_URL 再重启服务"
+  echo "  已生成配置（临时口令登录 local 模式）；统一认证批下来后把 $ENV_FILE 里的 PE_AUTH_MODE 改成 cas、填好两个 CAS 地址，再 systemctl restart pe-scores"
 fi
 chown root:pe "$ENV_FILE"; chmod 640 "$ENV_FILE"
 
