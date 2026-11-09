@@ -171,8 +171,10 @@ def sso_exchange(code: str) -> dict:
     accounts = [a for a in (info.get("accounts") or []) if isinstance(a, dict)]
     acct = next((a for a in accounts if _pick(a, "loginName") == staff_no), None) or \
         next((a for a in accounts if a.get("isMainOrg")), None) or (accounts[0] if accounts else {})
-    return {"staff_no": staff_no, "name": _pick(info, "name"),
-            "category": _pick(acct, "categoryName") or _pick(info, "categoryName")}
+    category = _pick(acct, "categoryName") or _pick(info, "categoryName")
+    if not category:  # 学校没给人员类别时按位数推：教职工工号8位，学生学号10位
+        category = {8: "教职工", 10: "学生"}.get(len(staff_no), "")
+    return {"staff_no": staff_no, "name": _pick(info, "name"), "category": category}
 
 
 def ensure_user(db: Session, staff_no: str, name: str = "") -> User:

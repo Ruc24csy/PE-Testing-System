@@ -103,3 +103,12 @@ def test_local_password_only_for_admin_in_sso_mode(sso):
     db.commit()
     c = TestClient(app)
     assert c.post("/api/auth/local-login", json={"staff_no": "T900", "password": "Teach#2026x"}).status_code == 401
+
+
+@pytest.mark.parametrize("login,ok", [("20200089", True), ("2025201717", False)])
+def test_sso_category_fallback_by_length(sso, login, ok):
+    sso["profile_body"] = {"loginName": login, "name": "某人"}
+    c = TestClient(app)
+    state = start(c)
+    r = c.get(f"/?code=CODE&state={state}", follow_redirects=False)
+    assert (r.headers["location"] == "/") is ok
