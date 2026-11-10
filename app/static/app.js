@@ -101,9 +101,10 @@ async function viewLogin() {
   const done = async () => { state.me = null; state.semesters = []; location.hash = "#/"; };
   if ($("#devBtn")) {
     const go = async () => { try { await api("/api/auth/dev-login", { method: "POST", body: { staff_no: $("#devNo").value } }); done(); } catch (e) { toast(e.message, true); } };
-    $("#devBtn").onclick = go; $("#devNo").onkeydown = (e) => e.key === "Enter" && go();
+    $("#devBtn").onclick = go; $("#devNo").onkeydown = (e) => { if (e.key === "Enter") go(); };
   }
-  $("#locPw").onkeydown = (e) => e.key === "Enter" && $("#locBtn").click();
+  // 注意：onxxx 属性处理函数返回 false 会取消默认行为，按键就打不进字，所以这里不能写成 `cond && fn()`
+  $("#locPw").onkeydown = (e) => { if (e.key === "Enter") $("#locBtn").click(); };
   $("#locBtn").onclick = async () => {
     try { await api("/api/auth/local-login", { method: "POST", body: { staff_no: $("#locNo").value, password: $("#locPw").value } }); done(); }
     catch (e) { toast(e.message, true); }
