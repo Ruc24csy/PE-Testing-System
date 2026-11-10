@@ -349,6 +349,16 @@ def save_cells(cid: int, request: Request, changes: list[dict] = Body(..., embed
             "status": c.status}
 
 
+@app.post("/api/classes/{cid}/preview")
+def preview_cells(cid: int, changes: list[dict] = Body(..., embed=True), u: User = Depends(current_user),
+                  db: Session = Depends(get_db)):
+    """不保存，只按输入即时换算（录入页离开单元格就更新得分与总成绩）。"""
+    c, sem = _class(db, cid, u)
+    if len(changes) > 2000:
+        raise HTTPException(400, "一次换算的单元格太多")
+    return services.preview_rows(db, c, sem, changes)
+
+
 @app.put("/api/classes/{cid}/config")
 def update_class_config(cid: int, request: Request, cfg: dict = Body(..., embed=True),
                         u: User = Depends(current_user), db: Session = Depends(get_db)):
