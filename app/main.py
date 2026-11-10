@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import openpyxl
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -44,8 +44,12 @@ async def security_headers(request: Request, call_next):
     resp.headers.setdefault("Referrer-Policy", "same-origin")
     if config.HTTPS_ONLY:
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
-    if request.url.path.startswith("/api/"):
+    path = request.url.path
+    if path.startswith("/api/"):
         resp.headers.setdefault("Cache-Control", "no-store")
+    elif path == "/" or path.startswith("/static/"):
+        # 每次都向服务器核对版本（有 ETag，没变时只回 304），避免浏览器拿缓存里的旧脚本
+        resp.headers["Cache-Control"] = "no-cache"
     return resp
 
 
@@ -61,7 +65,16 @@ def index(request: Request, code: str = "", state: str = ""):
             return sso_callback(request, code, state, db)
         finally:
             db.close()
-    return FileResponse(STATIC / "index.html")
+    return HTMLResponse(_index_html())
+
+
+def _index_html() -> str:
+    """首页里的脚本和样式地址带上文件版本号，更新后浏览器一定会取新文件。"""
+    html = (STATIC / "index.html").read_text("utf-8")
+    for name in ("app.js", "style.css"):
+        v = int((STATIC / name).stat().st_mtime)
+        html = html.replace(f"/static/{name}", f"/static/{name}?v={v}")
+    return html
 
 
 # ================================================================= 登录
