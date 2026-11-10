@@ -303,3 +303,16 @@ def test_admin_maintains_students_and_enrollments(admin):
     t = TestClient(app)
     t.post("/api/auth/dev-login", json={"staff_no": "T777"})
     assert t.patch(f"/api/admin/enrollments/{eid}", json={}).status_code == 403
+
+
+def test_excellent_rate(admin):
+    from app.services import excellence, is_excellent
+    assert is_excellent(89.5) and not is_excellent(89.4) and not is_excellent(None)
+    e = excellence([{"total": 95.9}, {"total": 89.5}, {"total": 70}, {"total": None}])
+    assert e["excellent"] == 2 and e["roster"] == 4 and e["rate"] == 0.5 and e["over"]
+    sid = next(s["id"] for s in admin.get("/api/semesters").json() if s["code"] == "2026-2027-1")
+    c1 = next(c for c in admin.get(f"/api/semesters/{sid}/classes?scope=all").json()["classes"] if c["class_no"] == "C001")
+    assert c1["excellent"] >= 1  # 张一总评 95.9
+    x = admin.get(f"/api/classes/{c1['id']}/export")
+    info = openpyxl.load_workbook(io.BytesIO(x.content))["说明"]
+    assert any(str(r[0].value).startswith("优秀率 C001") for r in info.iter_rows())

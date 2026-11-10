@@ -266,7 +266,7 @@ def class_brief(c: TeachingClass, counts: dict | None = None) -> dict:
             "location": c.location, "weekday": c.weekday, "periods": c.periods, "weeks": c.weeks,
             "enrolled_count": c.enrolled_count, "campus": c.campus, "status": c.status,
             "roster": (counts or {}).get("roster"), "entered": (counts or {}).get("entered"),
-            "pending": (counts or {}).get("pending")}
+            "pending": (counts or {}).get("pending"), "excellent": (counts or {}).get("excellent")}
 
 
 @app.get("/api/semesters/{sid}/classes")
@@ -293,6 +293,14 @@ def list_classes(sid: int, course: str = "", campus: str = "", scope: str = "min
         Enrollment.class_id.in_(ids), Enrollment.active.is_(True), StandardSnapshot.pending.is_(True))
         .group_by(Enrollment.class_id)).all()) if ids else {}
 
+    excellent = {}
+    if ids:
+        for cid, comp in db.execute(select(Enrollment.class_id, ScoreRecord.computed).join(
+                ScoreRecord, ScoreRecord.enrollment_id == Enrollment.id).where(
+                Enrollment.class_id.in_(ids), Enrollment.active.is_(True))):
+            if services.is_excellent((comp or {}).get("total")):
+                excellent[cid] = excellent.get(cid, 0) + 1
+
     def key(c):
         p = re.findall(r"\d{2}", c.periods or "")
         return (WEEKDAYS.get(c.weekday, 9), int(p[0]) if p else 99, c.course_name, c.class_name)
@@ -302,7 +310,8 @@ def list_classes(sid: int, course: str = "", campus: str = "", scope: str = "min
     has_any = db.scalar(select(func.count()).select_from(TeachingClass).where(TeachingClass.semester_id == sid)) > 0
     return {"semester": sem_dict(sem), "imported": has_any, "courses": all_courses,
             "classes": [class_brief(c, {"roster": roster.get(c.id, 0), "entered": entered.get(c.id, 0),
-                                        "pending": pend.get(c.id, 0)}) for c in classes]}
+                                        "pending": pend.get(c.id, 0), "excellent": excellent.get(c.id, 0)})
+                        for c in classes]}
 
 
 @app.get("/api/classes/{cid}")
