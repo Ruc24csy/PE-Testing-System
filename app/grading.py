@@ -1,6 +1,7 @@
 """学生年级判定与标准档匹配。
 
-判定顺序：年级校正名单（体育部确认的异动记录）> 学号推算 > 选课表“上课年级”（仅学号异常时兜底）。
+判定顺序：年级校正名单（体育部确认的异动记录）> 选课表“上课年级” > 学号推算（上课年级缺失时兜底）。
+降级、休学的学生按上课年级计算（2026-11-10 蔡松洋确认）。
 大五及以上按大三大四标准。一个学生可以同时选多门体育课，每门课各自录成绩。
 """
 from __future__ import annotations
@@ -53,10 +54,16 @@ def judge(student_no: str, semester: Semester, *, enrollments: list[Enrollment],
         reasons.append("学号不是10位")
     detail["学号推算年级"] = by_no
 
-    # 上课年级只作参考记录；学号无法推算年级时才用它兜底（2026-11-10 蔡松洋确认：以学号推算为准）
-    fields = sorted({e.grade_field.strip() for e in enrollments if e.grade_field and e.grade_field.strip()})
-    detail["上课年级"] = "/".join(fields)
-    by_field = S - int(fields[0]) + 1 if len(fields) == 1 and re.fullmatch(r"\d{4}", fields[0]) else None
+    # 上课年级：一人多条选课且取值不同时，取出现最多的那个（并列取较晚的年级）
+    from collections import Counter
+    vals = [e.grade_field.strip() for e in enrollments
+            if e.active and e.grade_field and re.fullmatch(r"\d{4}", e.grade_field.strip())]
+    detail["上课年级"] = "/".join(sorted(set(vals)))
+    by_field = None
+    if vals:
+        top = sorted(Counter(vals).items(), key=lambda kv: (kv[1], kv[0]))[-1][0]
+        by_field = S - int(top) + 1
+    detail["上课年级推算年级"] = by_field
 
     if student is None:
         reasons.append("无对应学籍信息（学生基础数据中未找到）")
@@ -84,10 +91,10 @@ def judge(student_no: str, semester: Semester, *, enrollments: list[Enrollment],
         return {"grade_num": grade_num, "band": band, "source": "异动记录", "detail": detail,
                 "pending": bool(keep), "reasons": keep}
 
-    if by_no is not None:
-        grade_num, source = by_no, "学号推算"
-    elif by_field is not None:
-        grade_num, source = by_field, "上课年级"  # 学号异常时兜底，仍在待确认清单里
+    if by_field is not None:
+        grade_num, source = by_field, "上课年级"
+    elif by_no is not None:
+        grade_num, source = by_no, "学号推算"  # 上课年级缺失时兜底
     else:
         grade_num, source = None, ""
     if grade_num is not None and grade_num > 4:

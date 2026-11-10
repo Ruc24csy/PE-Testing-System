@@ -299,7 +299,7 @@ def precheck(db: Session, kind: str, rows: list[dict], mapping: dict, semester: 
                     [r["_row"] for r in valid if r["student_no"] in multi], key="multi")
         blank = [r["_row"] for r in valid if not r.get("grade_field") or not r.get("class_label") or not r.get("major")]
         if blank:
-            rep.add("info", f"{len(blank)} 条记录上课年级、上课班级或专业为空，照常导入，年级按学号推算", blank)
+            rep.add("info", f"{len(blank)} 条记录上课年级、上课班级或专业为空，照常导入，上课年级为空的按学号推算年级", blank)
         badno = [r["_row"] for r in valid if not re.fullmatch(r"\d{10}", r["student_no"])]
         if badno:
             rep.add("warn", f"{len(badno)} 条记录学号不是10位，进入待确认清单", badno)
