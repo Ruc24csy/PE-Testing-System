@@ -93,15 +93,17 @@ async function viewLogin() {
   $("#app").innerHTML = `<div class="login"><div class="card"><h2>登录</h2>${err}
     ${mode.mode === "sso" ? `<p>使用数字人大统一身份认证（职工号与密码）登录。</p><a class="btn primary" href="/auth/login">统一身份认证登录</a>` : ""}
     ${mode.mode === "dev" ? `<div class="notice info">当前为开发测试模式：输入工号即可登录。正式部署时改为数字人大统一身份认证。</div>
-       <label>工号<input type="text" id="devNo" autofocus></label><button class="primary" id="devBtn">登录</button>` : ""}
+       <label>工号<input type="text" id="devNo" lang="en" inputmode="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus></label><button class="primary" id="devBtn">登录</button>` : ""}
     ${mode.mode === "local" ? `<p class="muted small">请使用体育部发放的工号和口令登录，首次登录须修改口令。</p>` : ""}
     ${mode.mode === "local" ? "<div>" : `<details style="margin-top:18px"><summary class="muted small">应急管理员登录</summary>`}
-      <label>工号<input type="text" id="locNo"></label><label>口令<input type="password" id="locPw"></label>
+      <label>工号<input type="text" id="locNo" lang="en" inputmode="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false"></label><label>口令<input type="password" id="locPw"></label>
       <button id="locBtn" class="${mode.mode === "local" ? "primary" : ""}">登录</button>${mode.mode === "local" ? "</div>" : "</details>"}</div></div>`;
   const done = async () => { state.me = null; state.semesters = []; location.hash = "#/"; };
-  if ($("#devBtn")) {
-    const go = async () => { try { await api("/api/auth/dev-login", { method: "POST", body: { staff_no: $("#devNo").value } }); done(); } catch (e) { toast(e.message, true); } };
-    $("#devBtn").onclick = go; $("#devNo").onkeydown = (e) => { if (e.key === "Enter") go(); };
+  const devNo = $("#devNo");
+  if (devNo) {
+    requestAnimationFrame(() => devNo.focus());
+    const go = async () => { try { await api("/api/auth/dev-login", { method: "POST", body: { staff_no: devNo.value } }); done(); } catch (e) { toast(e.message, true); } };
+    $("#devBtn").onclick = go; devNo.onkeydown = (e) => { if (e.key === "Enter") go(); };
   }
   // 注意：onxxx 属性处理函数返回 false 会取消默认行为，按键就打不进字，所以这里不能写成 `cond && fn()`
   $("#locPw").onkeydown = (e) => { if (e.key === "Enter") $("#locBtn").click(); };
