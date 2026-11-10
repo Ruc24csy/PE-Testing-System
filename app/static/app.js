@@ -296,7 +296,7 @@ function renderClass(C) {
   <div class="grid-wrap"><table class="grid" id="grid">
     <thead><tr>
       <th rowspan="2" class="sticky">序号</th>
-      <th rowspan="2" class="sticky2">学号</th><th rowspan="2" class="sticky3">姓名</th><th rowspan="2">性别</th><th rowspan="2" class="opt">学院</th><th rowspan="2" class="opt">专业</th><th rowspan="2" class="opt">行政班</th><th rowspan="2" class="opt">年级/标准档</th>
+      <th rowspan="2" class="sticky2">学号</th><th rowspan="2" class="sticky3">姓名</th><th rowspan="2">性别</th><th rowspan="2" class="opt">学院</th><th rowspan="2" class="opt">行政班</th><th rowspan="2" class="opt">年级/标准档</th>
       ${["a", "b"].map((k) => `<th colspan="2">${esc(itemName(k))}<span class="qm" data-std="${k}" title="查看评分表与加分规则">?</span></th>`).join("")}
       <th rowspan="2">体测小计</th><th rowspan="2">运动技能</th><th rowspan="2">平时成绩</th><th rowspan="2">总成绩</th><th rowspan="2"></th>
     </tr><tr>${["a", "b"].map(() => `<th>成绩</th><th>得分</th>`).join("")}</tr></thead>
@@ -365,7 +365,7 @@ function rowHtml(C, r, no) {
   return `<tr data-e="${r.enrollment_id}" data-no="${no}" class="${r.pending || !r.gender_code ? "pending" : ""}">
     <td class="sticky lock num">${no}</td>
     <td class="sticky2 lock">${esc(r.student_no)}</td><td class="sticky3 lock">${esc(r.name)} ${flags.join(" ")}</td><td class="lock">${esc(r.gender)}</td>
-    <td class="lock trunc opt" title="${esc(r.college)}">${esc(r.college)}</td><td class="lock trunc opt" title="${esc(r.major)}">${esc(r.major)}</td><td class="lock trunc opt" title="${esc(r.class_label)}">${esc(r.class_label)}</td>
+    <td class="lock trunc opt" title="${esc(r.college)}">${esc(r.college)}</td><td class="lock trunc opt" title="${esc(r.class_label)}">${esc(r.class_label)}</td>
     <td class="lock opt">${r.grade_num ? `大${r.grade_num}` : ""} ${esc(r.band_label)}</td>
     ${cell("a_raw")}${scoreCell("a")}${cell("b_raw")}${scoreCell("b")}
     <td class="lock num"><b>${fmt(r.subtotal, 2)}</b></td>${cell("skill")}${cell("regular")}
