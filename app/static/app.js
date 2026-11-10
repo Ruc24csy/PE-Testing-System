@@ -383,7 +383,7 @@ async function flushQueue(C) {
     saveDraft(C);
     refreshRows(C, new Set(items.map((i) => i.enrollment_id)));
     const nErr = res.results.filter((x) => !x.ok).length;
-    C.savedAt = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    C.savedAt = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
     setSaveState(nErr ? `有 ${nErr} 处输入没通过检查（标红）` : C.queue.size ? "有未保存的修改…" : saveIdleText(C));
     if (warns.length) toast(warns.slice(0, 3).join("；"));
   } catch (e) {
