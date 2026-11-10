@@ -158,16 +158,17 @@ async function viewHome(scope) {
 function fmtPeriods(p) { const m = String(p || "").match(/\d{2}/g); return m ? `第${m.map(Number).join("-")}节` : p || ""; }
 
 /* ------------------------------------------------------------ 录入界面 */
-const COLS = ["a_raw", "a_status", "b_raw", "b_status", "skill", "regular"];
+const SORTS = { no: "学号", name: "姓名", cls: "行政班", total: "总成绩（高→低）", missing: "未录入的在前" };
 async function viewClass(id) {
   const d = await api(`/api/classes/${id}`);
-  const C = { id: Number(id), d, rows: d.rows, byId: new Map(d.rows.map((r) => [r.enrollment_id, r])), queue: new Map(), undo: [], sel: new Set(), filter: "", errors: new Map() };
+  const C = { id: Number(id), d, rows: d.rows, byId: new Map(d.rows.map((r) => [r.enrollment_id, r])), queue: new Map(), undo: [], sel: new Set(), filter: "", errors: new Map(), savedAt: null };
   state.cls = C;
   C.flush = () => flushQueue(C);
   restoreDraft(C);
   renderClass(C);
   clearInterval(state.autosave);
-  state.autosave = setInterval(() => { if (state.cls === C) flushQueue(C); else clearInterval(state.autosave); }, 30000);
+  // 每分钟补存一次；平时改完一格不到 1 秒就会自动保存。保存不等于提交。
+  state.autosave = setInterval(() => { if (state.cls === C) flushQueue(C); else clearInterval(state.autosave); }, 60000);
 }
 function draftKey(C) { return `draft:${state.me.staff_no}:${C.id}`; }
 function saveDraft(C) { localStorage.setItem(draftKey(C), JSON.stringify([...C.queue.values()])); }
@@ -179,113 +180,180 @@ function restoreDraft(C) {
   setTimeout(() => flushQueue(C), 300);
 }
 
+/* ---- 填空式输入：每种项目一套空格，填满一个空自动跳到下一个空 ---- */
+const digitsOnly = (s) => String(s).replace(/[^\d]/g, "");
+function segSpec(C, item, field) {
+  if (field === "skill" || field === "regular") {
+    const max = Math.round((field === "skill" ? C.d.config.skill_weight : C.d.config.regular_weight) * 100);
+    const n = String(max).length;
+    // 再补一位就超过满分时视为填满：60 分制下打 7 直接跳，打 5 等下一位
+    return { segs: [{ n, max: n + 2, dec: true, after: `/${max}`, full: (v) => /^\d+$/.test(v) && (v.length >= n || v === "0" || Number(v) * 10 > max) }],
+      join: (a) => a[0], split: (t) => [String(t ?? "")] };
+  }
+  if (item === "run1000" || item === "run800") {
+    return { segs: [{ n: 1, after: "'" }, { n: 2, after: "\"", dec: true, max: 4, full: (v) => /^\d{2}$/.test(v) }],
+      join: (a) => (a[0] === "" && a[1] === "" ? "" : `${a[0] || 0}'${(a[1] || "0").padStart(2, "0")}"`),
+      split: (t) => {
+        const s = String(t ?? "").trim(); if (!s) return ["", ""];
+        let m = s.match(/^(\d+)\s*(?:'|:|：|分|’|′)\s*(\d+(?:\.\d+)?)/); if (m) return [m[1], m[2]];
+        m = s.match(/^(\d)(\d{2})$/); if (m) return [m[1], m[2]];
+        return [s, ""];
+      } };
+  }
+  if (item === "run50") {
+    return { segs: [{ n: 2, after: ".", full: (v) => /^\d+$/.test(v) && (v.length >= 2 || Number(v) >= 2) }, { n: 1, after: "s" }],
+      join: (a) => (a[0] === "" && a[1] === "" ? "" : a[1] === "" ? a[0] : `${a[0] || 0}.${a[1]}`),
+      split: (t) => { const s = String(t ?? "").replace(/[秒sS"]/g, "").trim(); if (!s) return ["", ""]; const m = s.match(/^(\d+)(?:\.(\d))?/); return m ? [m[1], m[2] || ""] : [s, ""]; } };
+  }
+  const simple = { long_jump: [3, "cm"], pull_up: [2, "个"], sit_up: [2, "个"], vital_capacity: [4, "ml"], sit_reach: [5, "cm", true] }[item] || [8, ""];
+  return { segs: [{ n: simple[0], after: simple[1], dec: !!simple[2], neg: !!simple[2], full: simple[2] ? () => false : null }],
+    join: (a) => a[0], split: (t) => [String(t ?? "").replace(/(cm|厘米|个|次|ml|毫升)$/i, "").trim()] };
+}
+function segFull(sp, i, v) { const s = sp.segs[i]; return s.full ? s.full(v) : v.length >= s.n; }
+function segClean(sp, i, v) {
+  const s = sp.segs[i];
+  let out = String(v).replace(s.neg ? /[^\d.\-]/g : s.dec ? /[^\d.]/g : /[^\d]/g, "");
+  return out.slice(0, s.max || s.n);
+}
+function segFieldItem(r, field) { return field.endsWith("_raw") ? r.display[field[0]].item : null; }
+function segOf(el) { return el && el.closest ? el.closest(".seg") : null; }
+function segValue(C, seg) {
+  const r = C.byId.get(Number(seg.dataset.e)); const sp = segSpec(C, segFieldItem(r, seg.dataset.f), seg.dataset.f);
+  return sp.join($$("input.sg", seg).map((x) => x.value.trim()));
+}
+function segSet(C, seg, text) {
+  const r = C.byId.get(Number(seg.dataset.e)); const sp = segSpec(C, segFieldItem(r, seg.dataset.f), seg.dataset.f);
+  const parts = sp.split(text); $$("input.sg", seg).forEach((x, i) => (x.value = parts[i] ?? ""));
+}
+
+function setSaveState(t) { const el = $("#saveState"); if (el) el.firstElementChild.textContent = t; }
+function saveIdleText(C) { return C.savedAt ? `已保存 ${C.savedAt}` : "所有修改都已保存"; }
+function submitText(C) { return C.d.class.status === "已提交" ? "已提交（已锁定）" : "未提交"; }
+function paintSubmitState(C) { const el = $("#saveState"); if (!el) return; el.lastElementChild.textContent = submitText(C); el.classList.toggle("done", C.d.class.status === "已提交"); }
+
 function renderClass(C) {
   const { d } = C; const c = d.class; const cfg = d.config; const sem = d.semester;
   const lab = (k) => cfg.slots.find((s) => s.key === k).label;
   const itemName = (k) => { const l = d.config_labels[k]; return l.M === l.F ? l.M : `${l.M}/${l.F}`; };
   const wt = (k) => (cfg.slots.find((s) => s.key === k).weight * 100).toFixed(0);
   const pendingN = C.rows.filter((r) => r.pending || !r.gender_code).length;
+  const sortBy = localStorage.getItem("classSort") || "no";
+  const showOpt = localStorage.getItem("showOpt") === "1";
   $("#app").innerHTML = `
   <div class="card">
-    <div class="row"><a href="#/">← 返回教学班列表</a><span class="spacer"></span><span class="status-bar" id="saveState"></span></div>
-    <h2 style="margin-top:8px">${esc(c.class_name)} <span class="tag s-${c.status}">${c.status}</span></h2>
-    <div class="class-head">
-      <div><span>学年学期</span>${esc(sem.name)}</div><div><span>课程名称</span>${esc(c.course_name)}</div>
-      <div><span>教学班号</span>${esc(c.class_no)}</div><div><span>授课教师</span>${esc(c.teacher_name)}</div>
-      <div><span>上课地点</span>${esc(c.location)}</div><div><span>周次节次</span>${esc(c.weeks)} ${esc(c.weekday)} ${esc(fmtPeriods(c.periods))}</div>
-      <div><span>选课人数</span>${C.rows.length}</div><div><span>评分标准</span>按学生逐人匹配（大一大二／大三大四）</div>
-      <div><span>评分表版本</span>${esc(d.standard_version)}</div>
-      <div><span>权重</span>${esc(itemName("a"))} ${wt("a")}%、${esc(itemName("b"))} ${wt("b")}%、技能 ${(cfg.skill_weight * 100).toFixed(0)}%、平时 ${(cfg.regular_weight * 100).toFixed(0)}% ${d.editable ? '<button class="link" id="cfgBtn">修改</button>' : ""}</div>
-    </div>
+    <div class="row"><a href="#/">← 返回教学班列表</a><span class="spacer"></span>
+      <span class="save-pill" id="saveState"><span>${C.queue.size ? "有未保存的修改…" : saveIdleText(C)}</span> · <span></span></span></div>
+    <h2 style="margin-top:8px">${esc(c.class_name)}</h2>
+    <div class="row muted">${esc(c.course_name)} · ${esc(c.weekday)} ${esc(fmtPeriods(c.periods))} · ${esc(c.location)} · ${C.rows.length} 人
+      <details class="more-info"><summary>班级信息</summary><div class="class-head">
+        <div><span>学年学期</span>${esc(sem.name)}</div><div><span>教学班号</span>${esc(c.class_no)}</div><div><span>授课教师</span>${esc(c.teacher_name)}</div>
+        <div><span>周次</span>${esc(c.weeks)}</div><div><span>评分表</span>${esc(d.standard_version)}，按学生年级逐人匹配</div>
+        <div><span>权重</span>${esc(itemName("a"))} ${wt("a")}%、${esc(itemName("b"))} ${wt("b")}%、技能 ${(cfg.skill_weight * 100).toFixed(0)}%、平时 ${(cfg.regular_weight * 100).toFixed(0)}% ${d.editable ? '<button class="link" id="cfgBtn">修改</button>' : ""}</div>
+      </div></details></div>
     ${!d.editable ? `<div class="notice info" style="margin-top:10px">${esc(d.readonly_reason)}${d.unlock_request && d.unlock_request.status === "待审核" ? "（撤回申请审核中）" : ""}</div>` : ""}
-    ${pendingN ? `<div class="notice" style="margin-top:10px">本班有 ${pendingN} 名学生的年级或性别待体育部确认（黄色行），确认前按暂定标准档计算，班级不能提交。</div>` : ""}
+    ${pendingN ? `<div class="notice" style="margin-top:10px">有 ${pendingN} 名学生的年级或性别待体育部确认（黄色行），确认前班级不能提交。</div>` : ""}
     <div class="toolbar">
-      <label><input type="checkbox" id="fMissing"> 仅显示未录入</label>
-      <label><input type="checkbox" id="fIssue"> 仅显示异常</label>
-      <label><input type="checkbox" id="fOpt" ${localStorage.getItem("showOpt") === "1" ? "checked" : ""}> 显示学院、专业、上课班级</label>
+      <label>排序 <select id="sortBy">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}" ${k === sortBy ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <label><input type="checkbox" id="fMissing"> 只看未录入</label>
       <span class="muted small" id="selInfo"></span>
-      ${d.editable ? `<select id="batchSlot"><option value="a_status">${esc(lab("a"))}</option><option value="b_status">${esc(lab("b"))}</option></select>
-        <select id="batchStatus">${d.statuses.map((s) => `<option>${s}</option>`).join("")}</select><button id="batchBtn">批量置状态</button>` : ""}
       <span class="spacer"></span>
-      ${d.editable ? `<button id="saveBtn">保存</button>` : ""}
-      <button id="exportBtn">导出Excel</button>
-      ${d.editable ? `<button id="tplBtn">下载录入模板</button><button id="uploadBtn">整班上传</button><button class="primary" id="submitBtn">提交</button>` : ""}
+      <details class="menu" id="moreMenu"><summary class="btn">更多操作 ▾</summary><div class="menu-body">
+        <label><input type="checkbox" id="fIssue"> 只看有问题的学生</label>
+        <label><input type="checkbox" id="fOpt" ${showOpt ? "checked" : ""}> 显示学院、专业、行政班、标准档</label>
+        ${d.editable ? `<div class="menu-sec">给勾选的学生设置特殊情况<div class="row"><select id="batchSlot"><option value="a_status">${esc(lab("a"))}</option><option value="b_status">${esc(lab("b"))}</option></select>
+          <select id="batchStatus">${d.statuses.map((s) => `<option value="${s}">${s === "正常" ? "正常（取消特殊情况）" : s}</option>`).join("")}</select><button id="batchBtn">设置</button></div></div>` : ""}
+        <button id="exportBtn">导出 Excel</button>
+        ${d.editable ? `<button id="tplBtn">下载录入模板</button><button id="uploadBtn">用模板整班上传</button>` : ""}
+      </div></details>
+      ${d.editable ? `<button id="saveBtn" title="平时会自动保存，这里可以立即保存一次">保存</button><button class="primary" id="submitBtn" title="提交后成绩锁定，交给体育部">提交成绩</button>` : ""}
       ${c.status === "已提交" && (!d.unlock_request || d.unlock_request.status !== "待审核") ? `<button id="unlockBtn">申请撤回</button>` : ""}
     </div>
-    <div class="muted small">只需填写原始成绩、运动技能评定和平时成绩，其余列自动计算。Enter/Tab 向下，Shift+Tab 向上，Esc 取消输入，Ctrl+Z 撤销；可从 Excel 复制一整列粘贴。点得分可查看计算过程。</div>
+    <div class="muted small">按顺序填数字，一格填满自动跳到下一格，Enter 换下一位学生。修改会自动保存，确认无误后再点“提交成绩”。免测、缺考等特殊情况点每行的“更多”。</div>
   </div>
-  <div class="grid-wrap"><table class="grid ${localStorage.getItem("showOpt") === "1" ? "" : "compact"}" id="grid">
+  <div class="grid-wrap"><table class="grid ${showOpt ? "" : "compact"}" id="grid">
     <thead><tr>
       <th rowspan="2" class="sticky"><input type="checkbox" id="selAll" title="全选"></th>
-      <th rowspan="2" class="sticky2">学号</th><th rowspan="2" class="sticky3">姓名</th><th rowspan="2">性别</th><th rowspan="2" class="opt">学院</th><th rowspan="2" class="opt">专业</th><th rowspan="2" class="opt">上课班级</th><th rowspan="2">年级/标准档</th>
-      ${["a", "b"].map((k) => `<th colspan="4">${esc(itemName(k))}（${wt(k)}%）<span class="qm" data-std="${k}" title="查看评分表与加分规则">?</span></th>`).join("")}
-      <th rowspan="2">体测小计</th><th rowspan="2">运动技能<br><span class="small muted">0—${(cfg.skill_weight * 100).toFixed(0)}</span></th><th rowspan="2">平时成绩<br><span class="small muted">0—${(cfg.regular_weight * 100).toFixed(0)}</span></th><th rowspan="2">课程总成绩</th><th rowspan="2"></th>
-    </tr><tr>${["a", "b"].map(() => `<th>原始成绩</th><th>状态</th><th>单项得分</th><th>折算分</th>`).join("")}</tr></thead>
+      <th rowspan="2" class="sticky2">学号</th><th rowspan="2" class="sticky3">姓名</th><th rowspan="2">性别</th><th rowspan="2" class="opt">学院</th><th rowspan="2" class="opt">专业</th><th rowspan="2" class="opt">行政班</th><th rowspan="2" class="opt">年级/标准档</th>
+      ${["a", "b"].map((k) => `<th colspan="2">${esc(itemName(k))}<span class="qm" data-std="${k}" title="查看评分表与加分规则">?</span></th>`).join("")}
+      <th rowspan="2">体测小计</th><th rowspan="2">运动技能</th><th rowspan="2">平时成绩</th><th rowspan="2">总成绩</th><th rowspan="2"></th>
+    </tr><tr>${["a", "b"].map(() => `<th>成绩</th><th>得分</th>`).join("")}</tr></thead>
     <tbody></tbody></table></div>`;
+  paintSubmitState(C);
   renderRows(C);
   bindClass(C);
 }
 
+function isMissing(r) {
+  const v = r.values; const miss = (k) => v[`${k}_status`] === "正常" && v[`${k}_raw`] === null;
+  return miss("a") || miss("b") || v.skill === null || v.regular === null;
+}
 function rowVisible(C, r) {
-  if ($("#fMissing") && $("#fMissing").checked) {
-    const v = r.values; const miss = (k) => v[`${k}_status`] === "正常" && v[`${k}_raw`] === null;
-    if (!(miss("a") || miss("b") || v.skill === null || v.regular === null)) return false;
-  }
+  if ($("#fMissing") && $("#fMissing").checked && !isMissing(r)) return false;
   if ($("#fIssue") && $("#fIssue").checked) {
     if (!(r.pending || !r.gender_code || r.issues.length || r.sudden.length || r.info_error || [...C.errors.keys()].some((k) => k.startsWith(r.enrollment_id + ":")))) return false;
   }
   return true;
 }
+function sortedRows(C) {
+  const by = ($("#sortBy") && $("#sortBy").value) || "no";
+  const no = (a, b) => String(a.student_no).localeCompare(String(b.student_no), "zh", { numeric: true });
+  const cmp = {
+    no,
+    name: (a, b) => String(a.name).localeCompare(String(b.name), "zh") || no(a, b),
+    cls: (a, b) => String(a.class_label || "").localeCompare(String(b.class_label || ""), "zh", { numeric: true }) || no(a, b),
+    total: (a, b) => (b.total ?? -1) - (a.total ?? -1) || no(a, b),
+    missing: (a, b) => Number(isMissing(b)) - Number(isMissing(a)) || no(a, b),
+  }[by] || no;
+  return [...C.rows].sort(cmp);
+}
 function renderRows(C) {
   const tb = $("#grid tbody");
-  tb.innerHTML = C.rows.filter((r) => rowVisible(C, r)).map((r) => rowHtml(C, r)).join("") || `<tr><td colspan="24" class="muted" style="padding:20px">没有符合条件的学生</td></tr>`;
+  tb.innerHTML = sortedRows(C).filter((r) => rowVisible(C, r)).map((r, i) => rowHtml(C, r, i + 1)).join("") || `<tr><td colspan="24" class="muted" style="padding:20px">没有符合条件的学生</td></tr>`;
   updateSelInfo(C);
 }
-function rowHtml(C, r) {
+function rowHtml(C, r, no) {
   const ed = C.d.editable;
   const v = r.values;
-  const cell = (field, extra = "") => {
+  const cell = (field) => {
     const k = field[0]; const slot = field.endsWith("_raw") ? r.display[k] : null;
-    const ro = !ed || (slot && v[`${k}_status`] !== "正常") || (slot && !r.gender_code);
     const key = `${r.enrollment_id}:${field}`; const err = C.errors.get(key);
+    if (slot && v[`${k}_status`] !== "正常") {
+      return `<td class="in ro"><div class="seg st-only" data-e="${r.enrollment_id}" data-f="${field}"><button class="link stTag" data-e="${r.enrollment_id}" title="点击修改特殊情况">${esc(v[`${k}_status`])}</button></div></td>`;
+    }
+    const ro = !ed || (slot && !r.gender_code);
     const pend = C.queue.get(key);
-    const val = pend ? pend.value : field.endsWith("_raw") ? slot.raw_text : v[field] ?? "";
+    const val = pend ? pend.value : slot ? slot.raw_text : v[field] ?? "";
+    const sp = segSpec(C, slot ? slot.item : null, field); const parts = sp.split(val);
     let hint = "";
     if (err) hint = `<div class="hint err">${esc(err)}</div>`;
     else if (slot) {
-      if (slot.status_display && slot.status !== "正常") hint = `<div class="hint">${esc(slot.status_display)}</div>`;
-      else if (slot.hint) hint = `<div class="hint ${slot.below_min ? "warnc" : ""}">${esc(slot.hint)}</div>`;
       if (!r.gender_code) hint = `<div class="hint warnc">性别待确认，暂不能录入</div>`;
+      else if (slot.hint) hint = `<div class="hint ${slot.below_min ? "warnc" : ""}">${esc(slot.hint)}</div>`;
     }
-    const ph = field.endsWith("_raw") && slot.item_label ? slot.item_label : "";
-    return `<td class="in ${err ? "bad" : ""} ${ro ? "ro" : ""}" ${extra}><input data-e="${r.enrollment_id}" data-f="${field}" value="${esc(val)}" placeholder="${esc(ph)}" ${ro ? "readonly" : ""} autocomplete="off">${hint}</td>`;
+    const inputs = sp.segs.map((s, i) => `<input class="sg" data-i="${i}" value="${esc(parts[i] ?? "")}" style="width:${Math.max(s.n, 1) + 0.9}ch" maxlength="${s.max || s.n}" inputmode="${s.dec ? "decimal" : "numeric"}" ${ro ? "readonly" : ""} autocomplete="off"><span class="sx">${esc(s.after)}</span>`).join("");
+    return `<td class="in ${err ? "bad" : ""} ${ro ? "ro" : ""}"><div class="seg" data-e="${r.enrollment_id}" data-f="${field}" title="${esc(slot && slot.item_label || "")}">${inputs}</div>${hint}</td>`;
   };
-  const statusCell = (k) => {
-    const f = `${k}_status`;
-    return `<td class="in st"><select data-e="${r.enrollment_id}" data-f="${f}" ${ed ? "" : "disabled"}>${C.d.statuses.map((s) => `<option ${v[f] === s ? "selected" : ""}>${s === "正常" ? "正常实测" : s}</option>`).join("")}</select></td>`;
-  };
-  const scoreCells = (k) => {
+  const scoreCell = (k) => {
     const s = r.display[k];
-    const sc = s.score === null ? (s.status_display || "") : `${fmt(s.score, s.score % 1 ? 1 : 0)}${s.bonus ? `<div class="bonus">含加分+${s.bonus}</div>` : ""}`;
-    return `<td class="lock num score-cell" data-ex="${r.enrollment_id}:${k}">${sc}</td><td class="lock num score-cell" data-ex="${r.enrollment_id}:${k}">${fmt(s.folded, 2)}</td>`;
+    const sc = s.score === null ? "" : `${fmt(s.score, s.score % 1 ? 1 : 0)}${s.bonus ? `<div class="bonus">含加分+${s.bonus}</div>` : ""}`;
+    return `<td class="lock num score-cell" data-ex="${r.enrollment_id}:${k}" title="${s.folded !== null && s.folded !== undefined ? `折算分 ${fmt(s.folded, 2)}，点击看计算过程` : "点击看计算过程"}">${sc}</td>`;
   };
   const flags = [];
   if (r.pending) flags.push(`<span class="tag warn" title="${esc(r.pending_reasons.join("；"))}">待确认</span>`);
   if (r.flags.includes("band_changed")) flags.push(`<span class="tag warn" title="体育部已变更该生标准档">档已变更</span>`);
   if (r.info_error) flags.push(`<span class="tag err" title="${esc(r.info_error)}">信息有误</span>`);
   if (r.sudden.length) flags.push(`<span class="tag warn" title="${esc(r.sudden.join("；"))}">突变</span>`);
-  return `<tr data-e="${r.enrollment_id}" class="${r.pending || !r.gender_code ? "pending" : ""} ${C.sel.has(r.enrollment_id) ? "selected" : ""}">
-    <td class="sticky lock"><input type="checkbox" class="rowSel" data-e="${r.enrollment_id}" ${C.sel.has(r.enrollment_id) ? "checked" : ""}> ${r.seq}</td>
-    <td class="sticky2 lock">${esc(r.student_no)}</td><td class="sticky3 lock">${esc(r.name)}</td><td class="lock">${esc(r.gender)}</td>
+  return `<tr data-e="${r.enrollment_id}" data-no="${no}" class="${r.pending || !r.gender_code ? "pending" : ""} ${C.sel.has(r.enrollment_id) ? "selected" : ""}">
+    <td class="sticky lock"><input type="checkbox" class="rowSel" data-e="${r.enrollment_id}" ${C.sel.has(r.enrollment_id) ? "checked" : ""}> ${no}</td>
+    <td class="sticky2 lock">${esc(r.student_no)}</td><td class="sticky3 lock">${esc(r.name)} ${flags.join(" ")}</td><td class="lock">${esc(r.gender)}</td>
     <td class="lock trunc opt" title="${esc(r.college)}">${esc(r.college)}</td><td class="lock trunc opt" title="${esc(r.major)}">${esc(r.major)}</td><td class="lock trunc opt" title="${esc(r.class_label)}">${esc(r.class_label)}</td>
-    <td class="lock">${r.grade_num ? `大${r.grade_num}` : ""} ${esc(r.band_label)} ${flags.join(" ")}</td>
-    ${cell("a_raw")}${statusCell("a")}${scoreCells("a")}${cell("b_raw")}${statusCell("b")}${scoreCells("b")}
+    <td class="lock opt">${r.grade_num ? `大${r.grade_num}` : ""} ${esc(r.band_label)}</td>
+    ${cell("a_raw")}${scoreCell("a")}${cell("b_raw")}${scoreCell("b")}
     <td class="lock num"><b>${fmt(r.subtotal, 2)}</b></td>${cell("skill")}${cell("regular")}
     <td class="lock num"><b>${fmt(r.total, 1)}</b></td>
     <td class="lock"><button class="link rowMenu" data-e="${r.enrollment_id}">更多</button></td></tr>`;
 }
 
-function setSaveState(t) { const el = $("#saveState"); if (el) el.textContent = t; }
 function enqueue(C, eid, field, value, { undo = true } = {}) {
   const r = C.byId.get(eid);
   const key = `${eid}:${field}`;
@@ -311,11 +379,12 @@ async function flushQueue(C) {
       else C.errors.set(key, it.error);
     }
     for (const r of res.rows) { const i = C.rows.findIndex((x) => x.enrollment_id === r.enrollment_id); if (i >= 0) { r.seq = C.rows[i].seq; C.rows[i] = r; C.byId.set(r.enrollment_id, r); } }
-    if (C.d.class.status !== res.status) C.d.class.status = res.status;
+    if (C.d.class.status !== res.status) { C.d.class.status = res.status; paintSubmitState(C); }
     saveDraft(C);
     refreshRows(C, new Set(items.map((i) => i.enrollment_id)));
     const nErr = res.results.filter((x) => !x.ok).length;
-    setSaveState(nErr ? `有 ${nErr} 处输入未通过校验（标红）` : `已自动保存 ${new Date().toLocaleTimeString()}`);
+    C.savedAt = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    setSaveState(nErr ? `有 ${nErr} 处输入没通过检查（标红）` : C.queue.size ? "有未保存的修改…" : saveIdleText(C));
     if (warns.length) toast(warns.slice(0, 3).join("；"));
   } catch (e) {
     for (const it of items) if (!C.queue.has(`${it.enrollment_id}:${it.field}`)) C.queue.set(`${it.enrollment_id}:${it.field}`, it);
@@ -325,73 +394,125 @@ async function flushQueue(C) {
   } finally { C._busy = false; if (C.queue.size) setTimeout(() => flushQueue(C), 1500); }
 }
 function refreshRows(C, ids) {
-  const active = document.activeElement; const af = active && active.dataset ? [active.dataset.e, active.dataset.f] : null;
+  // 重画行时保住正在输入的那一格：焦点、已经打进去还没离开的数字
+  const active = document.activeElement; const aseg = segOf(active);
+  const keep = aseg ? { e: aseg.dataset.e, f: aseg.dataset.f, i: active.dataset.i, vals: $$("input.sg", aseg).map((x) => x.value), orig: aseg.dataset.orig, pos: active.selectionStart } : null;
   for (const id of ids) {
     const tr = $(`#grid tr[data-e="${id}"]`); if (!tr) continue;
-    const t = document.createElement("tbody"); t.innerHTML = rowHtml(C, C.byId.get(id)); tr.replaceWith(t.firstElementChild);
+    const t = document.createElement("tbody"); t.innerHTML = rowHtml(C, C.byId.get(id), Number(tr.dataset.no)); tr.replaceWith(t.firstElementChild);
   }
-  if (af && ids.has(Number(af[0]))) { const el = $(`#grid [data-e="${af[0]}"][data-f="${af[1]}"]`); if (el && el !== active) { el.focus(); if (el.select) el.select(); } }
+  if (keep && ids.has(Number(keep.e))) {
+    const seg = $(`#grid .seg[data-e="${keep.e}"][data-f="${keep.f}"]`); if (!seg) return;
+    const ins = $$("input.sg", seg); if (!ins.length) return;
+    if (seg.dataset.orig === undefined) seg.dataset.orig = keep.orig ?? "";
+    if (document.activeElement !== active) {
+      ins.forEach((x, i) => (x.value = keep.vals[i] ?? x.value));
+      const el = ins[Number(keep.i) || 0] || ins[0]; seg._refocus = true; el.focus(); seg._refocus = false;
+      try { el.setSelectionRange(keep.pos, keep.pos); } catch (_) { /* 不支持的输入类型 */ }
+    }
+  }
 }
-function moveFocus(from, dRow) {
-  const inputs = $$(`#grid [data-f="${from.dataset.f}"]`);
-  const i = inputs.indexOf(from); const n = inputs[i + dRow];
-  if (n) { n.focus(); if (n.select) n.select(); }
+function focusSeg(seg, last = false) {
+  const ins = $$("input.sg", seg); const el = last ? ins[ins.length - 1] : ins[0];
+  if (el) { el.focus(); el.select(); return true; } return false;
 }
-function updateSelInfo(C) { const el = $("#selInfo"); if (el) el.textContent = C.sel.size ? `已选 ${C.sel.size} 人` : ""; }
+function moveFocus(seg, dRow) {
+  const segs = $$(`#grid .seg[data-f="${seg.dataset.f}"]`);
+  for (let i = segs.indexOf(seg) + dRow; i >= 0 && i < segs.length; i += dRow) if (focusSeg(segs[i])) return;
+}
+function updateSelInfo(C) { const el = $("#selInfo"); if (el) el.textContent = C.sel.size ? `已勾选 ${C.sel.size} 人` : ""; }
+function commitSeg(C, seg) {
+  if (!seg || !C.d.editable || !$("input.sg", seg) || $("input.sg", seg).readOnly) return;
+  const val = segValue(C, seg);
+  if (val !== (seg.dataset.orig ?? "")) enqueue(C, Number(seg.dataset.e), seg.dataset.f, val);
+  seg.dataset.orig = val;
+}
 
 function bindClass(C) {
   const grid = $("#grid");
-  grid.addEventListener("focusin", (e) => { if (e.target.tagName === "INPUT" && e.target.dataset.f) e.target.dataset.orig = e.target.value; });
+  grid.addEventListener("focusin", (e) => {
+    const seg = segOf(e.target); if (!seg || !e.target.classList.contains("sg")) return;
+    if (!seg.contains(e.relatedTarget) && !seg._refocus) seg.dataset.orig = segValue(C, seg);
+    e.target.select();
+  });
+  grid.addEventListener("focusout", (e) => {
+    const seg = segOf(e.target); if (!seg || !seg.isConnected || seg.contains(e.relatedTarget)) return;
+    commitSeg(C, seg);
+  });
   grid.addEventListener("change", (e) => {
     const t = e.target;
-    if (t.classList.contains("rowSel")) { const id = Number(t.dataset.e); t.checked ? C.sel.add(id) : C.sel.delete(id); t.closest("tr").classList.toggle("selected", t.checked); updateSelInfo(C); return; }
-    if (!t.dataset.f || t.readOnly) return;
-    enqueue(C, Number(t.dataset.e), t.dataset.f, t.value.trim());
+    if (t.classList.contains("rowSel")) { const id = Number(t.dataset.e); t.checked ? C.sel.add(id) : C.sel.delete(id); t.closest("tr").classList.toggle("selected", t.checked); updateSelInfo(C); }
+  });
+  grid.addEventListener("input", (e) => {
+    const t = e.target; const seg = segOf(t); if (!seg || !t.classList.contains("sg")) return;
+    const r = C.byId.get(Number(seg.dataset.e)); const sp = segSpec(C, segFieldItem(r, seg.dataset.f), seg.dataset.f);
+    const i = Number(t.dataset.i); const raw = t.value;
+    // 打了分隔符（' : . 空格）就跳到下一个空
+    const sep = /[^\d]$/.test(raw) && !(sp.segs[i].dec && raw.endsWith(".") && i === sp.segs.length - 1) && !(sp.segs[i].neg && raw === "-");
+    t.value = segClean(sp, i, sep ? raw.slice(0, -1) : raw);
+    const ins = $$("input.sg", seg);
+    if (sep || segFull(sp, i, t.value)) {
+      if (i < ins.length - 1) { ins[i + 1].focus(); ins[i + 1].select(); }
+      else if (!sep) moveFocus(seg, 1);
+    }
   });
   grid.addEventListener("keydown", (e) => {
-    const t = e.target; if (!t.dataset || !t.dataset.f) return;
-    if (e.key === "Enter" || (e.key === "Tab")) { e.preventDefault(); if (t.tagName === "INPUT" && t.value !== t.dataset.orig && !t.readOnly) enqueue(C, Number(t.dataset.e), t.dataset.f, t.value.trim()); t.dataset.orig = t.value; moveFocus(t, e.shiftKey ? -1 : 1); }
-    else if (e.key === "ArrowDown" && t.tagName === "INPUT") { e.preventDefault(); moveFocus(t, 1); }
-    else if (e.key === "ArrowUp" && t.tagName === "INPUT") { e.preventDefault(); moveFocus(t, -1); }
-    else if (e.key === "Escape") { t.value = t.dataset.orig ?? t.value; t.blur(); }
+    const t = e.target; const seg = segOf(t); if (!seg || !t.classList.contains("sg")) return;
+    const ins = $$("input.sg", seg); const i = Number(t.dataset.i);
+    const atStart = t.selectionStart === 0 && t.selectionEnd === 0; const atEnd = t.selectionStart === t.value.length;
+    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); commitSeg(C, seg); moveFocus(seg, e.shiftKey ? -1 : 1); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); moveFocus(seg, 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); moveFocus(seg, -1); }
+    else if (e.key === "ArrowLeft" && atStart && i > 0) { e.preventDefault(); ins[i - 1].focus(); ins[i - 1].select(); }
+    else if (e.key === "ArrowRight" && atEnd && i < ins.length - 1) { e.preventDefault(); ins[i + 1].focus(); ins[i + 1].select(); }
+    else if (e.key === "Backspace" && t.value === "" && i > 0) { e.preventDefault(); ins[i - 1].focus(); ins[i - 1].value = ins[i - 1].value.slice(0, -1); }
+    else if (e.key === "Escape") { segSet(C, seg, seg.dataset.orig ?? ""); t.blur(); }
   });
   grid.addEventListener("paste", (e) => {
-    const t = e.target; if (!t.dataset || !t.dataset.f || t.tagName !== "INPUT" || !C.d.editable) return;
+    const t = e.target; const seg = segOf(t); if (!seg || !t.classList.contains("sg") || !C.d.editable || t.readOnly) return;
     const text = (e.clipboardData || window.clipboardData).getData("text");
     const lines = text.replace(/\r/g, "").split("\n"); if (lines.length && lines[lines.length - 1] === "") lines.pop();
-    if (lines.length <= 1) return;
     e.preventDefault();
-    const inputs = $$(`#grid [data-f="${t.dataset.f}"]`); const start = inputs.indexOf(t);
+    if (lines.length <= 1) { segSet(C, seg, (lines[0] || "").split("\t")[0].trim()); commitSeg(C, seg); return; }
+    const segs = $$(`#grid .seg[data-f="${seg.dataset.f}"]`); const start = segs.indexOf(seg);
     let n = 0;
-    lines.forEach((line, i) => { const el = inputs[start + i]; if (!el || el.readOnly) return; const v = line.split("\t")[0].trim(); el.value = v; enqueue(C, Number(el.dataset.e), el.dataset.f, v); n++; });
-    toast(`已粘贴 ${n} 行，逐行校验中`);
+    lines.forEach((line, i) => {
+      const s = segs[start + i]; const first = s && $("input.sg", s); if (!first || first.readOnly) return;
+      const v = line.split("\t")[0].trim(); segSet(C, s, v); s.dataset.orig = v; enqueue(C, Number(s.dataset.e), s.dataset.f, v); n++;
+    });
+    toast(`已粘贴 ${n} 行，逐行检查中`);
   });
   grid.addEventListener("click", (e) => {
     const t = e.target;
     const ex = t.closest("[data-ex]"); if (ex) return showExplain(C, ...ex.dataset.ex.split(":"));
     if (t.dataset.std) return showStandard(C, t.dataset.std);
-    if (t.classList.contains("rowMenu")) return rowMenu(C, Number(t.dataset.e));
+    if (t.classList.contains("rowMenu") || t.classList.contains("stTag")) return rowMenu(C, Number(t.dataset.e));
   });
   document.onkeydown = (e) => {
     if (state.cls !== C) return;
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !(document.activeElement && document.activeElement.tagName === "INPUT" && document.activeElement.value !== document.activeElement.dataset.orig)) {
+    const aseg = segOf(document.activeElement);
+    const typing = aseg && segValue(C, aseg) !== (aseg.dataset.orig ?? "");
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !typing) {
       const u = C.undo.pop(); if (!u) return toast("没有可撤销的修改");
       e.preventDefault(); enqueue(C, u.eid, u.field, u.value, { undo: false });
-      const el = $(`#grid [data-e="${u.eid}"][data-f="${u.field}"]`); if (el) el.value = u.value;
+      const s = $(`#grid .seg[data-e="${u.eid}"][data-f="${u.field}"]`); if (s && $("input.sg", s)) { segSet(C, s, u.value); s.dataset.orig = u.value; }
       toast("已撤销上一次修改");
     }
   };
+  document.onclick = (e) => { const m = $("#moreMenu"); if (m && m.open && !m.contains(e.target)) m.open = false; };
   $("#selAll").onchange = (e) => { const ids = $$("#grid .rowSel").map((x) => Number(x.dataset.e)); ids.forEach((id) => (e.target.checked ? C.sel.add(id) : C.sel.delete(id))); renderRows(C); };
   $("#fOpt").onchange = (e) => { localStorage.setItem("showOpt", e.target.checked ? "1" : "0"); $("#grid").classList.toggle("compact", !e.target.checked); };
+  $("#sortBy").onchange = (e) => { localStorage.setItem("classSort", e.target.value); renderRows(C); };
   $("#fMissing").onchange = () => renderRows(C); $("#fIssue").onchange = () => renderRows(C);
   const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
   on("#batchBtn", () => {
-    if (!C.sel.size) return toast("请先勾选学生", true);
+    if (!C.sel.size) return toast("请先在表格最左边勾选学生", true);
     const f = $("#batchSlot").value, s = $("#batchStatus").value;
     for (const id of C.sel) enqueue(C, id, f, s);
-    toast(`已将 ${C.sel.size} 人置为“${s}”`);
+    $("#moreMenu").open = false;
+    toast(`已将 ${C.sel.size} 人设为“${s}”`);
   });
-  on("#saveBtn", async () => { await flushQueue(C); if (!C.queue.size) toast("已保存"); });
+  on("#saveBtn", async () => { $$("#grid .seg").forEach((s) => s.contains(document.activeElement) && commitSeg(C, s)); clearTimeout(C._t); await flushQueue(C); if (!C.queue.size && !C.errors.size) toast("已保存（还没有提交）"); });
   on("#exportBtn", async () => { await flushQueue(C); download(`/api/classes/${C.id}/export`); });
   on("#tplBtn", () => download(`/api/classes/${C.id}/template`));
   on("#uploadBtn", () => uploadDialog(C));
@@ -429,7 +550,11 @@ async function rowMenu(C, eid) {
   const h = await api(`/api/classes/${C.id}/history/${eid}`);
   const st = h.standard;
   const fieldName = { a_raw: "项目一原始成绩", a_status: "项目一状态", b_raw: "项目二原始成绩", b_status: "项目二状态", skill: "运动技能评定", regular: "平时成绩", note: "备注" };
+  const slots = C.d.config.slots;
+  const stSel = (k) => { const f = `${k}_status`; return `<label>${esc(r.display[k].item_label || slots.find((s) => s.key === k).label)} <select data-st="${f}" ${C.d.editable ? "" : "disabled"}>${C.d.statuses.map((s) => `<option value="${s}" ${r.values[f] === s ? "selected" : ""}>${s === "正常" ? "正常参加" : s}</option>`).join("")}</select></label>`; };
   modal(`<h3>${esc(r.student_no)} ${esc(r.name)}</h3>
+    <h4>特殊情况</h4><div class="row">${stSel("a")}${stSel("b")}</div>
+    <p class="muted small">免测不计入成绩；缓测记为缺项；缺考、作弊、违纪记 0 分，作弊或违纪请在下方备注里写明原因。</p>
     <h4>标准档判定依据</h4>${st ? `<div class="kv"><div>标准档</div><div>${st.grade_num ? `大${st.grade_num}，` : ""}${esc(st.band_label)}${st.pending ? " <span class='tag warn'>待确认</span>" : ""}</div>
       <div>判定来源</div><div>${esc(st.source || "—")}</div><div>来源字段</div><div>${esc(Object.entries(st.detail || {}).map(([k, v]) => `${k}：${typeof v === "object" && v ? JSON.stringify(v) : v ?? "—"}`).join("；"))}</div>
       ${st.reasons.length ? `<div>待确认原因</div><div>${esc(st.reasons.join("；"))}</div>` : ""}<div>认定</div><div>${esc(st.decided_by)} ${esc(st.decided_at)}</div></div>` : "<p class='muted'>暂无</p>"}
@@ -443,6 +568,7 @@ async function rowMenu(C, eid) {
     const mark = async (note) => { try { await api(`/api/classes/${C.id}/info-error`, { method: "POST", body: { enrollment_id: eid, note } }); r.info_error = note || null; refreshRows(C, new Set([eid])); closeModal(); toast(note ? "已标记，体育部会统一核对更正" : "已取消标记"); } catch (e) { toast(e.message, true); } };
     $("#ieBtn", el).onclick = () => { const v = $("#ieNote", el).value.trim(); if (!v) return toast("请写明哪里有误", true); mark(v); };
     if ($("#ieClr", el)) $("#ieClr", el).onclick = () => mark("");
+    $$("[data-st]", el).forEach((x) => (x.onchange = () => { enqueue(C, eid, x.dataset.st, x.value); toast(`已设为“${x.value === "正常" ? "正常参加" : x.value}”`); }));
     if ($("#noteBtn", el)) $("#noteBtn", el).onclick = () => { enqueue(C, eid, "note", $("#noteIn", el).value.trim()); closeModal(); };
   });
 }
