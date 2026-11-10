@@ -701,7 +701,7 @@ def pending_list(sid: int, u: User = Depends(admin_user), db: Session = Depends(
                     "teacher": c.teacher_name, "note": e.info_error}
                    for e, c in db.execute(select(Enrollment, TeachingClass).join(
                        TeachingClass, TeachingClass.id == Enrollment.class_id).where(
-                       Enrollment.semester_id == sid, Enrollment.info_error.is_not(None)))]
+                       Enrollment.semester_id == sid, Enrollment.active.is_(True), Enrollment.info_error.is_not(None)))]
     return {"semester": sem_dict(sem), "students": out, "summary": reasons, "teacher_pending": teacher_pending,
             "info_errors": info_errors}
 
@@ -1056,6 +1056,8 @@ def semester_overview(sid: int, u: User = Depends(admin_user), db: Session = Dep
             "unlock_waiting": db.scalar(select(func.count()).select_from(UnlockRequest).join(
                 TeachingClass, TeachingClass.id == UnlockRequest.class_id).where(
                 TeachingClass.semester_id == sid, UnlockRequest.status == "待审核")),
+            "info_errors": db.scalar(select(func.count()).select_from(Enrollment).where(
+                Enrollment.semester_id == sid, Enrollment.active.is_(True), Enrollment.info_error.is_not(None))),
             "teacher_pending": db.scalar(select(func.count()).select_from(TeachingClass).where(
                 TeachingClass.semester_id == sid, TeachingClass.teacher_pending.is_(True)))}
 
