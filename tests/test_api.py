@@ -316,3 +316,19 @@ def test_excellent_rate(admin):
     x = admin.get(f"/api/classes/{c1['id']}/export")
     info = openpyxl.load_workbook(io.BytesIO(x.content))["说明"]
     assert any(str(r[0].value).startswith("优秀率 C001") for r in info.iter_rows())
+
+
+def test_preview_does_not_save(admin):
+    sid = next(s["id"] for s in admin.get("/api/semesters").json() if s["code"] == "2026-2027-1")
+    cid = next(c["id"] for c in admin.get(f"/api/semesters/{sid}/classes?scope=all").json()["classes"] if c["class_no"] == "C001")
+    rows = admin.get(f"/api/classes/{cid}").json()["rows"]
+    r = next(x for x in rows if x["student_no"] == "2025200002")
+    before = r["values"]["regular"]
+    res = admin.post(f"/api/classes/{cid}/preview", json={"changes": [
+        {"enrollment_id": r["enrollment_id"], "field": "regular", "value": "7.5"},
+        {"enrollment_id": r["enrollment_id"], "field": "skill", "value": "99"}]}).json()
+    pr = res["rows"][0]
+    assert pr["values"]["regular"] == 7.5 and pr["total"] is not None
+    assert res["errors"][0]["field"] == "skill"
+    again = next(x for x in admin.get(f"/api/classes/{cid}").json()["rows"] if x["student_no"] == "2025200002")
+    assert again["values"]["regular"] == before  # 没有写库

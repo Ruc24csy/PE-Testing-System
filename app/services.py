@@ -125,7 +125,7 @@ def build_row(seq, e: Enrollment, stu: Student | None, snap: StandardSnapshot | 
         "values": values,
         "display": {}, "subtotal": comp["subtotal"], "total": comp["total"], "complete": comp["complete"],
         "issues": issues, "sudden": sudden,
-        "updated_by": rec.updated_by if rec else "", "updated_at": rec.updated_at.isoformat() if rec else None,
+        "updated_by": rec.updated_by if rec else "", "updated_at": rec.updated_at.isoformat() if rec and rec.updated_at else None,
     }
     for k, info in comp["slots"].items():
         r = info["result"]
@@ -299,6 +299,51 @@ def _slot_summ(info):
 def _summ(comp):
     return {"slots": {k: _slot_summ(v) for k, v in comp["slots"].items()},
             "subtotal": comp["subtotal"], "total": comp["total"], "complete": comp["complete"]}
+
+
+def preview_rows(db: Session, c: TeachingClass, sem: Semester, changes: list[dict]) -> dict:
+    """按还没保存的修改即时算出这些行的得分和总成绩，不写数据库（录入页“离开单元格即换算”用）。"""
+    from types import SimpleNamespace
+    cfg = class_config(c, sem)
+    by_eid: dict[int, list[dict]] = defaultdict(list)
+    for ch in changes:
+        by_eid[int(ch["enrollment_id"])].append(ch)
+    enr = {e.id: e for e in db.scalars(select(Enrollment).where(Enrollment.id.in_(list(by_eid)),
+                                                                Enrollment.class_id == c.id))}
+    rows, errors = [], []
+    for eid, chs in by_eid.items():
+        e = enr.get(eid)
+        if e is None:
+            continue
+        stu = db.get(Student, e.student_no)
+        snap = db.scalar(select(StandardSnapshot).where(StandardSnapshot.semester_id == sem.id,
+                                                        StandardSnapshot.student_no == e.student_no))
+        rec = db.scalar(select(ScoreRecord).where(ScoreRecord.enrollment_id == eid))
+        vals = {f: (getattr(rec, f) if rec else None) for f in INPUT_FIELDS}
+        for k in ("a_status", "b_status"):
+            vals[k] = vals[k] or "正常"
+        gender = stu.gender if stu else None
+        for ch in chs:
+            f = ch.get("field")
+            if f not in INPUT_FIELDS:
+                continue
+            try:
+                v = parse_cell(f, ch.get("value"), cfg, gender)
+            except scoring.ParseError as ex:
+                errors.append({"enrollment_id": eid, "field": f, "error": str(ex)})
+                continue
+            if f in ("a_status", "b_status"):
+                v = v or "正常"
+                if v != "正常":
+                    vals[f.replace("_status", "_raw")] = None
+            vals[f] = v
+        fake = SimpleNamespace(**vals, standard_version=rec.standard_version if rec else sem.standard_version,
+                               updated_by=rec.updated_by if rec else "", updated_at=rec.updated_at if rec else None)
+        row = build_row(0, e, stu, snap, fake, cfg, sem, None)
+        if fake.updated_at is None:
+            row["updated_at"] = None
+        rows.append(row)
+    return {"rows": rows, "errors": errors}
 
 
 def recompute_class(db: Session, c: TeachingClass, sem: Semester):

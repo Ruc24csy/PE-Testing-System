@@ -382,6 +382,30 @@ function enqueue(C, eid, field, value, { undo = true } = {}) {
   C.queue.set(key, { enrollment_id: eid, field, value });
   saveDraft(C);
   paintSaveState(C);
+  schedulePreview(C, eid);
+}
+// 保存仍按每分钟一次；但离开单元格就向服务器要一次“只算不存”的换算，得分和总成绩立刻更新
+function schedulePreview(C, eid) {
+  (C._pv || (C._pv = new Set())).add(eid);
+  clearTimeout(C._pvT); C._pvT = setTimeout(() => runPreview(C), 120);
+}
+async function runPreview(C) {
+  const ids = new Set(C._pv); C._pv.clear();
+  const changes = [...C.queue.values()].filter((x) => ids.has(x.enrollment_id));
+  if (!changes.length) return;
+  try {
+    const res = await api(`/api/classes/${C.id}/preview`, { method: "POST", body: { changes } });
+    if (state.cls !== C) return;
+    const touched = new Set();
+    for (const r of res.rows) {
+      if (![...C.queue.values()].some((x) => x.enrollment_id === r.enrollment_id)) continue;  // 期间已保存，以保存结果为准
+      const i = C.rows.findIndex((x) => x.enrollment_id === r.enrollment_id); if (i < 0) continue;
+      r.seq = C.rows[i].seq; r.sudden = C.rows[i].sudden; C.rows[i] = r; C.byId.set(r.enrollment_id, r); touched.add(r.enrollment_id);
+    }
+    for (const ch of changes) C.errors.delete(`${ch.enrollment_id}:${ch.field}`);
+    for (const er of res.errors) C.errors.set(`${er.enrollment_id}:${er.field}`, er.error);
+    if (touched.size) refreshRows(C, touched);
+  } catch (_) { /* 换算预览失败不影响保存，等保存时再算 */ }
 }
 async function flushQueue(C) {
   if (!C.queue.size || C._busy) return;
