@@ -323,18 +323,14 @@ function rowHtml(C, r, no) {
     const pend = C.queue.get(key);
     const val = pend ? pend.value : slot ? slot.raw_text : v[field] ?? "";
     const sp = segSpec(C, slot ? slot.item : null, field); const parts = sp.split(val);
-    let hint = "";
-    if (err) hint = `<div class="hint err">${esc(err)}</div>`;
-    else if (slot) {
-      if (!r.gender_code) hint = `<div class="hint warnc">性别待确认，暂不能录入</div>`;
-      else if (slot.hint) hint = `<div class="hint ${slot.below_min ? "warnc" : ""}">${esc(slot.hint)}</div>`;
-    }
+    // 不在格子下面加说明，免得行高跟着变；错误原因放在鼠标悬停提示里
+    const tip = err || (slot && !r.gender_code ? "性别待确认，暂不能录入" : (slot && slot.item_label) || "");
     const inputs = sp.segs.map((s, i) => `<input class="sg" data-i="${i}" value="${esc(parts[i] ?? "")}" style="width:${Math.max(s.n, 1) + 0.9}ch" maxlength="${s.max || s.n}" inputmode="${s.dec ? "decimal" : "numeric"}" ${ro ? "readonly" : ""} autocomplete="off"><span class="sx">${esc(s.after)}</span>`).join("");
-    return `<td class="in ${err ? "bad" : ""} ${ro ? "ro" : ""}"><div class="seg" data-e="${r.enrollment_id}" data-f="${field}" title="${esc(slot && slot.item_label || "")}">${inputs}</div>${hint}</td>`;
+    return `<td class="in ${err ? "bad" : ""} ${ro ? "ro" : ""}"><div class="seg" data-e="${r.enrollment_id}" data-f="${field}" title="${esc(tip)}">${inputs}</div></td>`;
   };
   const scoreCell = (k) => {
     const s = r.display[k];
-    const sc = s.score === null ? "" : `${fmt(s.score, s.score % 1 ? 1 : 0)}${s.bonus ? `<div class="bonus">含加分+${s.bonus}</div>` : ""}`;
+    const sc = s.score === null ? "" : `${fmt(s.score, s.score % 1 ? 1 : 0)}${s.bonus ? `<span class="bonus" title="含加分">+${s.bonus}</span>` : ""}`;
     return `<td class="lock num score-cell" data-ex="${r.enrollment_id}:${k}" title="${s.folded !== null && s.folded !== undefined ? `折算分 ${fmt(s.folded, 2)}，点击看计算过程` : "点击看计算过程"}">${sc}</td>`;
   };
   const flags = [];
@@ -384,7 +380,9 @@ async function flushQueue(C) {
     const nErr = res.results.filter((x) => !x.ok).length;
     C.savedAt = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
     setSaveState(nErr ? `有 ${nErr} 处输入没通过检查（标红）` : C.queue.size ? "有未保存的修改…" : saveIdleText(C));
-    if (warns.length) toast(warns.slice(0, 3).join("；"));
+    const firstErr = res.results.find((x) => !x.ok);
+    if (firstErr) toast(`${C.byId.get(firstErr.enrollment_id).name}：${firstErr.error}`, true);
+    else if (warns.length) toast(warns.slice(0, 3).join("；"));
   } catch (e) {
     for (const it of items) if (!C.queue.has(`${it.enrollment_id}:${it.field}`)) C.queue.set(`${it.enrollment_id}:${it.field}`, it);
     saveDraft(C);

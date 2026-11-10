@@ -90,7 +90,7 @@ table.grid td.in.st{min-width:0;width:96px}
 /* 填空式输入 */
 table.grid td.in .seg{display:flex;align-items:center;justify-content:flex-end;gap:1px;white-space:nowrap}
 table.grid td.in .seg input.sg{width:auto;min-width:0;flex:none;text-align:center;padding:2px 1px;border:none;border-bottom:1px solid #b8bec8;border-radius:0;background:transparent}
-table.grid td.in .seg input.sg:focus{border-bottom:2px solid var(--brand2);background:#fff;box-shadow:none}
+table.grid td.in .seg input.sg:focus{border-bottom-color:var(--brand2);background:#fff;box-shadow:0 1px 0 var(--brand2)}
 table.grid td.in.ro .seg input.sg{border-bottom-color:transparent}
 table.grid td.in.bad .seg input.sg{background:var(--errbg);border-bottom-color:var(--err)}
 table.grid td.in .sx{color:var(--muted);font-size:12px;margin-right:2px}
@@ -103,3 +103,5 @@ details.menu{position:relative}details.menu summary{list-style:none;cursor:point
 .menu-body{position:absolute;right:0;top:calc(100% + 4px);background:#fff;border:1px solid var(--line);border-radius:6px;box-shadow:0 4px 16px #0002;padding:10px;z-index:30;display:flex;flex-direction:column;gap:8px;min-width:260px;align-items:flex-start}
 .menu-body>button{width:100%;text-align:left}
 .menu-sec{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:8px 0;width:100%}
+table.grid td.in.bad .seg{background:var(--errbg);border-radius:3px}
+.bonus{margin-left:3px}
