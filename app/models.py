@@ -92,6 +92,8 @@ class Student(Base):
     class_name: Mapped[str] = mapped_column(String(128), default="")
     grade: Mapped[str] = mapped_column(String(16), default="")
     major: Mapped[str] = mapped_column(String(128), default="")
+    # 管理员手动补录或修改过：之后导入学生基础数据表时不覆盖这条
+    manual: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 
 
@@ -113,6 +115,8 @@ class Enrollment(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)  # 一人多条选课时，体育部可停用多余记录
     seq: Mapped[int] = mapped_column(Integer, default=0)
     info_error: Mapped[str | None] = mapped_column(String(256))  # 教师标记“信息有误”的说明
+    # 管理员手动添加、修改、调班或移除过：之后覆盖导入选课表时不改动这条（不改字段、不删除、不恢复）
+    manual: Mapped[bool] = mapped_column(Boolean, default=False)
 
     teaching_class: Mapped[TeachingClass] = relationship()
 
@@ -229,3 +233,25 @@ SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 def init_db():
     Base.metadata.create_all(engine)
+    _add_missing_columns()
+
+
+def _add_missing_columns():
+    """老库升级：给已有的表补上新增的列（只加列，不改不删）。"""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in have:
+                    continue
+                ddl = col.type.compile(engine.dialect)
+                default = col.default.arg if col.default is not None and not callable(col.default.arg) else None
+                sql = f'ALTER TABLE {table.name} ADD COLUMN {col.name} {ddl}'
+                if isinstance(default, bool):
+                    sql += f" NOT NULL DEFAULT {'1' if default else '0'}" if engine.dialect.name == "sqlite" \
+                        else f" NOT NULL DEFAULT {'true' if default else 'false'}"
+                conn.execute(text(sql))

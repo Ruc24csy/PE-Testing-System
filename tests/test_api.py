@@ -263,3 +263,43 @@ def test_issue_teacher_passwords(admin):
     ws = openpyxl.load_workbook(io.BytesIO(r.content)).active
     assert ws.cell(2, 1).value == "T001"
     assert TestClient(app).post("/api/auth/local-login", json={"staff_no": "T001", "password": "Teacher#2026"}).status_code == 401
+
+
+def test_admin_maintains_students_and_enrollments(admin):
+    sid = next(s["id"] for s in admin.get("/api/semesters").json() if s["code"] == "2026-2027-1")
+    classes = {c["class_no"]: c["id"] for c in admin.get(f"/api/semesters/{sid}/classes?scope=all").json()["classes"]}
+    # 补录：一个学生基础数据里没有的学生
+    r = admin.post(f"/api/admin/semesters/{sid}/enrollments", json={"student_no": "2025200099", "class_id": classes["C001"], "name": "孙九"})
+    assert r.status_code == 200
+    eid = r.json()["enrollment_id"]
+    d = admin.get(f"/api/admin/semesters/{sid}/student/2025200099").json()
+    assert d["student"] is None and d["standard"]["pending"]
+    assert admin.put(f"/api/admin/semesters/{sid}/student/2025200099", json={"name": "孙九"}).status_code == 400  # 必须有性别
+    d = admin.put(f"/api/admin/semesters/{sid}/student/2025200099", json={"gender": "女", "name": "孙九", "college": "法学院"}).json()
+    assert d["student"]["gender"] == "F" and not d["standard"]["pending"] and d["standard"]["band"] == "12"
+    # 录一个成绩，再调班：成绩跟着走
+    assert admin.post(f"/api/classes/{classes['C001']}/cells", json={"changes": [{"enrollment_id": eid, "field": "skill", "value": "50"}]}).json()["results"][0]["ok"]
+    r = admin.patch(f"/api/admin/enrollments/{eid}", json={"class_id": classes["C002"], "class_label": "2025法学1班", "grade_field": "2025"})
+    assert r.status_code == 200
+    rows = admin.get(f"/api/classes/{classes['C002']}").json()["rows"]
+    moved = next(x for x in rows if x["student_no"] == "2025200099")
+    assert moved["values"]["skill"] == 50 and moved["class_label"] == "2025法学1班"
+    assert all(x["student_no"] != "2025200099" for x in admin.get(f"/api/classes/{classes['C001']}").json()["rows"])
+    # 覆盖导入选课表：手动改动不被覆盖，调走的人不会被加回原班
+    from tests.test_api import ENROLL, do_import, xlsx
+    do_import(admin, "base", xlsx(BASE + [["2025200005", "钱五", "女", "经济学院", None, "2025", "人大", None],
+                                          ["2025200099", "别名", "男", "x", None, "2025", "人大", None]]), sid)
+    assert admin.get(f"/api/admin/semesters/{sid}/student/2025200099").json()["student"]["gender"] == "F"
+    do_import(admin, "enroll", xlsx(ENROLL + [["2026-2027-1", "2025200099", "孙九", "", "", "", "", "C001", "乒乓球10班", "", "乒乓球", "公共体育", "中关村校区"]]), sid)
+    assert all(x["student_no"] != "2025200099" for x in admin.get(f"/api/classes/{classes['C001']}").json()["rows"])
+    assert any(x["student_no"] == "2025200099" for x in admin.get(f"/api/classes/{classes['C002']}").json()["rows"])
+    # 移出与恢复
+    assert admin.delete(f"/api/admin/enrollments/{eid}").status_code == 200
+    assert all(x["student_no"] != "2025200099" for x in admin.get(f"/api/classes/{classes['C002']}").json()["rows"])
+    assert admin.post(f"/api/admin/enrollments/{eid}/restore").status_code == 200
+    assert admin.get(f"/api/admin/semesters/{sid}/students?q=孙九").json()["students"][0]["student_no"] == "2025200099"
+    acts = {l["action"] for l in admin.get(f"/api/admin/logs?semester_id={sid}").json()["logs"]}
+    assert {"加入教学班", "修改学生信息", "修改选课", "移出教学班", "恢复选课"} <= acts
+    t = TestClient(app)
+    t.post("/api/auth/dev-login", json={"staff_no": "T777"})
+    assert t.patch(f"/api/admin/enrollments/{eid}", json={}).status_code == 403

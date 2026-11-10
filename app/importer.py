@@ -359,6 +359,8 @@ def commit(db: Session, kind: str, rows: list[dict], semester: Semester | None, 
                 s = Student(student_no=no)
                 db.add(s)
                 n_new += 1
+            elif s.manual:
+                continue  # 管理员手动改过的不覆盖
             s.name = r.get("name", "")
             s.gender = {"男": "M", "女": "F"}.get(r.get("gender", ""))
             s.college, s.class_name = r.get("college", ""), r.get("class_name", "")
@@ -442,6 +444,8 @@ def commit(db: Session, kind: str, rows: list[dict], semester: Semester | None, 
                 e = Enrollment(semester_id=semester.id, class_id=c.id, student_no=sno)
                 db.add(e)
                 added += 1
+            elif e.manual:
+                continue  # 管理员手动改过（含调走、移除）的不覆盖
             else:
                 updated += 1
             e.name, e.class_label, e.major = r.get("name", ""), r.get("class_label", ""), r.get("major", "")
@@ -449,7 +453,7 @@ def commit(db: Session, kind: str, rows: list[dict], semester: Semester | None, 
             e.campus, e.course_category = r.get("campus", ""), r.get("course_category", "")
             e.seq = i
             e.active = True if e.id is None else e.active
-        gone = [e for s, e in cur.items() if s not in incoming]
+        gone = [e for s, e in cur.items() if s not in incoming and not e.manual]
         scored = _has_scores(db, [e.id for e in gone])
         for e in gone:
             if e.id in scored:
