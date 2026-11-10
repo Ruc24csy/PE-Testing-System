@@ -1,4 +1,8 @@
-"""学生年级判定与标准档匹配（需求文档二（六））。"""
+"""学生年级判定与标准档匹配。
+
+判定顺序：年级校正名单（体育部确认的异动记录）> 学号推算 > 选课表“上课年级”（仅学号异常时兜底）。
+大五及以上按大三大四标准。一个学生可以同时选多门体育课，每门课各自录成绩。
+"""
 from __future__ import annotations
 
 import re
@@ -49,24 +53,11 @@ def judge(student_no: str, semester: Semester, *, enrollments: list[Enrollment],
         reasons.append("学号不是10位")
     detail["学号推算年级"] = by_no
 
-    # 上课年级
-    fields = {e.grade_field.strip() for e in enrollments if e.grade_field and e.grade_field.strip()}
-    by_field = None
-    if len(fields) == 1:
-        f = fields.pop()
-        detail["上课年级"] = f
-        if re.fullmatch(r"\d{4}", f):
-            by_field = S - int(f) + 1
-    elif len(fields) > 1:
-        detail["上课年级"] = "/".join(sorted(fields))
-        reasons.append("多条选课记录的上课年级不一致")
-    else:
-        detail["上课年级"] = ""
-        reasons.append("上课年级为空")
-    detail["上课年级推算年级"] = by_field
+    # 上课年级只作参考记录；学号无法推算年级时才用它兜底（2026-11-10 蔡松洋确认：以学号推算为准）
+    fields = sorted({e.grade_field.strip() for e in enrollments if e.grade_field and e.grade_field.strip()})
+    detail["上课年级"] = "/".join(fields)
+    by_field = S - int(fields[0]) + 1 if len(fields) == 1 and re.fullmatch(r"\d{4}", fields[0]) else None
 
-    if len([e for e in enrollments if e.active]) > 1:
-        reasons.append("同一学号对应多条选课记录")
     if student is None:
         reasons.append("无对应学籍信息（学生基础数据中未找到）")
     elif student.gender not in ("M", "F"):
@@ -88,17 +79,15 @@ def judge(student_no: str, semester: Semester, *, enrollments: list[Enrollment],
         else:
             grade_num = S - corr.cohort + 1 if corr.cohort else None
             band = band_of(grade_num)
-        # 异动记录是第一优先，命中即以记录为准；只保留与年级无关的问题（性别、学籍、多条选课）
-        keep = [r for r in reasons if r.startswith(("学生基础数据", "无对应学籍", "同一学号"))]
+        # 异动记录是第一优先，命中即以记录为准；只保留与年级无关的问题（性别、学籍）
+        keep = [r for r in reasons if r.startswith(("学生基础数据", "无对应学籍"))]
         return {"grade_num": grade_num, "band": band, "source": "异动记录", "detail": detail,
                 "pending": bool(keep), "reasons": keep}
 
-    if by_field is not None:
-        grade_num, source = by_field, "上课年级"
-        if by_no is not None and band_of(by_no) != band_of(by_field):
-            reasons.append(f"上课年级与学号推算冲突（大{by_field} / 大{by_no}），跨越大二/大三分界")
-    elif by_no is not None:
+    if by_no is not None:
         grade_num, source = by_no, "学号推算"
+    elif by_field is not None:
+        grade_num, source = by_field, "上课年级"  # 学号异常时兜底，仍在待确认清单里
     else:
         grade_num, source = None, ""
     if grade_num is not None and grade_num > 4:

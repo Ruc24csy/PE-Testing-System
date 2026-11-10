@@ -614,10 +614,9 @@ async function adPending(el) {
     $("#pBody").innerHTML = d.students.filter((s) => !q || (s.student_no + s.name + s.reasons.join("")).includes(q)).map((s) => `<tr>
       <td class="nw">${esc(s.student_no)}</td><td class="nw">${esc(s.name)}</td><td class="nw">${esc(s.gender)}</td><td class="nw">${s.grade_num ? `大${s.grade_num}，` : ""}${esc(s.band_label)}<div class="muted small">${esc(s.source)}</div></td>
       <td>${s.reasons.map((r) => `<div>${esc(r)}</div>`).join("")}</td>
-      <td>${s.enrollments.map((e) => `<div>${esc(e.class_name)}（${esc(e.teacher)}）上课年级 ${esc(e.grade_field || "空")}${s.enrollments.length > 1 ? (e.active ? ' <span class="tag">有效</span>' : ' <span class="tag err">已停用</span>') + (e.active && s.enrollments.filter((x) => x.active).length > 1 ? ` <button class="link" data-keep="${e.enrollment_id}" data-no="${s.student_no}">只保留这条</button>` : "") : ""}</div>`).join("")}</td>
+      <td>${s.enrollments.map((e) => `<div>${esc(e.class_name)}（${esc(e.teacher)}）上课年级 ${esc(e.grade_field || "空")}</div>`).join("")}</td>
       <td class="nw"><button class="link" data-fix="${s.student_no}">确认标准档</button></td></tr>`).join("");
     $$("[data-fix]", el).forEach((b) => (b.onclick = () => fixDialog(sem, d.students.find((s) => s.student_no === b.dataset.fix), () => adPending(el))));
-    $$("[data-keep]", el).forEach((b) => (b.onclick = async () => { await api(`/api/admin/semesters/${sem.id}/students/${b.dataset.no}/keep`, { method: "POST", body: { enrollment_id: Number(b.dataset.keep) } }); toast("已保留"); adPending(el); }));
   };
   $("#pSearch").oninput = draw; draw();
   $$("[data-tset]", el).forEach((b) => (b.onclick = async () => { try { await api(`/api/admin/classes/${b.dataset.tset}`, { method: "PATCH", body: { staff_no: $(`[data-tno="${b.dataset.tset}"]`).value, teacher_name: $(`[data-tname="${b.dataset.tset}"]`).value } }); toast("已指定"); adPending(el); } catch (e) { toast(e.message, true); } }));
