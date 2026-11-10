@@ -139,11 +139,11 @@ async function viewHome(scope) {
   let body;
   if (!d.imported) body = `<div class="notice">${esc(sem.name)}的课程信息尚未导入，请联系体育部。</div>`;
   else if (!d.classes.length && !filt.course && !filt.campus) body = `<div class="notice">${all ? "本学期没有教学班。" : `本学期没有找到您（工号 ${esc(state.me.staff_no)}）的教学班，请联系体育部核对课程安排信息。`}</div>`;
-  else body = `<table class="list"><thead><tr><th>课程名称</th><th>教学班名称</th><th>上课时间</th><th>上课地点</th><th>校区</th><th>选课人数</th>${all ? "<th>授课教师</th>" : ""}<th>录入进度</th><th>状态</th></tr></thead><tbody>
+  else body = `<table class="list"><thead><tr><th>课程名称</th><th>教学班名称</th><th>上课时间</th><th>上课地点</th><th>校区</th><th>选课人数</th>${all ? "<th>授课教师</th>" : ""}<th>录入进度</th><th title="总评四舍五入后≥90分（即≥89.5分）的人数 ÷ 班级人数">优秀率</th><th>状态</th></tr></thead><tbody>
     ${d.classes.map((c) => `<tr class="clickable" data-id="${c.id}"><td>${esc(c.course_name)}</td><td><a href="#/class/${c.id}">${esc(c.class_name)}</a>${c.pending ? ` <span class="tag warn" title="有学生的年级或性别待体育部确认">待确认 ${c.pending}</span>` : ""}</td>
       <td>${esc(c.weekday)} ${esc(fmtPeriods(c.periods))}<div class="muted small">${esc(c.weeks)}</div></td><td>${esc(c.location)}</td><td>${esc(c.campus)}</td><td>${c.roster}</td>
       ${all ? `<td>${esc(c.teacher_name)}${c.teacher_pending ? ' <span class="tag err">教师待补</span>' : ""}</td>` : ""}
-      <td>${c.entered}/${c.roster}</td><td><span class="tag s-${c.status}">${c.status}</span></td></tr>`).join("")}</tbody></table>`;
+      <td>${c.entered}/${c.roster}</td><td>${excellentCell(c.excellent, c.roster)}</td><td><span class="tag s-${c.status}">${c.status}</span></td></tr>`).join("")}</tbody></table>`;
   $("#app").innerHTML = `<div class="card"><div class="row"><h2 style="margin:0">${esc(sem.name)} ${sem.is_current ? '<span class="tag cur">本学期</span>' : ""}</h2>
     <span class="spacer"></span>
     <select id="fCourse"><option value="">全部课程</option>${d.courses.map((c) => `<option ${c === filt.course ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
@@ -154,6 +154,23 @@ async function viewHome(scope) {
   const save = () => { sessionStorage.setItem("classFilter", JSON.stringify({ course: $("#fCourse").value, campus: $("#fCampus").value, scope: $("#fAll") && $("#fAll").checked ? "all" : "mine" })); viewHome(); };
   $("#fCourse").onchange = save; $("#fCampus").onchange = save; if ($("#fAll")) $("#fAll").onchange = save;
   $$("tr.clickable").forEach((tr) => (tr.onclick = (e) => { if (e.target.tagName !== "A") location.hash = `#/class/${tr.dataset.id}`; }));
+}
+const EXCELLENT_LINE = 89.5;   // 总评四舍五入后≥90分即为优秀
+const EXCELLENT_WARN = 0.3;    // 优秀率超过30%标红提醒
+function excellentCell(n, total) {
+  if (!total) return "—";
+  const r = n / total;
+  return `<span style="${r > EXCELLENT_WARN ? "color:var(--err);font-weight:600" : ""}">${(r * 100).toFixed(1)}%</span><div class="muted small">${n}/${total}</div>`;
+}
+function updateExcellence(C) {
+  const el = $("#exRate"); if (!el) return;
+  const n = C.rows.length;
+  const ex = C.rows.filter((r) => r.total !== null && r.total >= EXCELLENT_LINE).length;
+  const done = C.rows.filter((r) => r.complete).length;
+  const rate = n ? ex / n : 0;
+  const over = rate > EXCELLENT_WARN;
+  el.className = "notice " + (over ? "err" : "info");
+  el.innerHTML = `<b>优秀率 ${(rate * 100).toFixed(1)}%</b>　优秀（总评≥89.5分）${ex} 人 / 全班 ${n} 人，已录完 ${done} 人${over ? "　<b>已超过30%，请注意控制优秀比例</b>" : ""}`;
 }
 function fmtPeriods(p) { const m = String(p || "").match(/\d{2}/g); return m ? `第${m.map(Number).join("-")}节` : p || ""; }
 
@@ -262,7 +279,8 @@ function renderClass(C) {
         <div><span>权重</span>${esc(itemName("a"))} ${wt("a")}%、${esc(itemName("b"))} ${wt("b")}%、技能 ${(cfg.skill_weight * 100).toFixed(0)}%、平时 ${(cfg.regular_weight * 100).toFixed(0)}% ${d.editable ? '<button class="link" id="cfgBtn">修改</button>' : ""}</div>
       </div></details></div>
     ${!d.editable ? `<div class="notice info" style="margin-top:10px">${esc(d.readonly_reason)}${d.unlock_request && d.unlock_request.status === "待审核" ? "（撤回申请审核中）" : ""}</div>` : ""}
-    ${pendingN ? `<div class="notice" style="margin-top:10px">有 ${pendingN} 名学生的年级或性别待体育部确认（黄色行），确认前班级不能提交。</div>` : ""}
+    <div id="exRate" class="notice info" style="margin-top:10px"></div>
+    ${pendingN ? `<div class="notice" style="margin-top:10px">本班有 ${pendingN} 名学生的年级或性别待体育部确认（黄色行），确认前按暂定标准档计算，班级不能提交。</div>` : ""}
     <div class="toolbar">
       <label>排序 <select id="sortBy">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}" ${k === sortBy ? "selected" : ""}>${v}</option>`).join("")}</select></label>
       <label><input type="checkbox" id="fMissing"> 只看未录入</label>
@@ -313,6 +331,7 @@ function sortedRows(C) {
 }
 function renderRows(C) {
   const tb = $("#grid tbody");
+  updateExcellence(C);
   tb.innerHTML = sortedRows(C).filter((r) => rowVisible(C, r)).map((r, i) => rowHtml(C, r, i + 1)).join("") || `<tr><td colspan="24" class="muted" style="padding:20px">没有符合条件的学生</td></tr>`;
 }
 function rowHtml(C, r, no) {
@@ -395,6 +414,7 @@ async function flushQueue(C) {
   } finally { C._busy = false; paintSaveState(C); }
 }
 function refreshRows(C, ids) {
+  updateExcellence(C);
   // 重画行时保住正在输入的那一格：焦点、已经打进去还没离开的数字
   const active = document.activeElement; const aseg = segOf(active);
   const keep = aseg ? { e: aseg.dataset.e, f: aseg.dataset.f, i: active.dataset.i, vals: $$("input.sg", aseg).map((x) => x.value), orig: aseg.dataset.orig, pos: active.selectionStart } : null;
@@ -561,7 +581,7 @@ async function rowMenu(C, eid) {
     const mark = async (note) => { try { await api(`/api/classes/${C.id}/info-error`, { method: "POST", body: { enrollment_id: eid, note } }); r.info_error = note || null; refreshRows(C, new Set([eid])); closeModal(); toast(note ? "已标记，体育部会统一核对更正" : "已取消标记"); } catch (e) { toast(e.message, true); } };
     $("#ieBtn", el).onclick = () => { const v = $("#ieNote", el).value.trim(); if (!v) return toast("请写明哪里有误", true); mark(v); };
     if ($("#ieClr", el)) $("#ieClr", el).onclick = () => mark("");
-    $$("[data-st]", el).forEach((x) => (x.onchange = () => { enqueue(C, eid, x.dataset.st, x.value); toast(`已设为“${x.value === "正常" ? "正常参加" : x.value}”`); }));
+    $$("[data-st]", el).forEach((x) => (x.onchange = () => { enqueue(C, eid, x.dataset.st, x.value); flushQueue(C); toast(`已设为“${x.value === "正常" ? "正常参加" : x.value}”`); }));
     if ($("#noteBtn", el)) $("#noteBtn", el).onclick = () => { enqueue(C, eid, "note", $("#noteIn", el).value.trim()); closeModal(); };
   });
 }
@@ -637,9 +657,9 @@ function uploadDialog(C) {
 async function viewAdmin(tab) {
   if (!state.me.is_admin) { location.hash = "#/"; return; }
   tab = tab || "overview";
-  const tabs = [["overview", "概览"], ["semesters", "学期管理"], ["import", "课程信息导入"], ["pending", "待确认清单"], ["unlock", "撤回审核"], ["logs", "操作日志"], ["users", "账号"]];
+  const tabs = [["overview", "概览"], ["semesters", "学期管理"], ["import", "课程信息导入"], ["pending", "待确认清单"], ["students", "学生信息"], ["unlock", "撤回审核"], ["logs", "操作日志"], ["users", "账号"]];
   $("#app").innerHTML = `<div class="card"><div class="tabs">${tabs.map(([k, l]) => `<a href="#/admin/${k}" class="${k === tab ? "on" : ""}">${l}</a>`).join("")}</div><div id="adminBody"></div></div>`;
-  const fn = { overview: adOverview, semesters: adSemesters, import: adImport, pending: adPending, unlock: adUnlock, logs: adLogs, users: adUsers }[tab];
+  const fn = { overview: adOverview, semesters: adSemesters, import: adImport, pending: adPending, students: adStudents, unlock: adUnlock, logs: adLogs, users: adUsers }[tab];
   try { await fn($("#adminBody")); } catch (e) { $("#adminBody").innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
 }
 async function adOverview(el) {
@@ -650,6 +670,7 @@ async function adOverview(el) {
    ${!o.classes ? `<div class="notice">本学期课程信息尚未导入。请到“课程信息导入”依次导入学生基础数据表、课程安排表、学生选课表。</div>` : ""}
    <div class="kv"><div>教学班</div><div>${o.classes}（未开始 ${o.status["未开始"] || 0}／录入中 ${o.status["录入中"] || 0}／已提交 ${o.status["已提交"] || 0}）</div>
    <div>有效选课记录</div><div>${o.enrollments}</div><div>待确认学生</div><div>${o.pending} <a href="#/admin/pending">去处理</a></div>
+   <div>教师标记信息有误</div><div>${o.info_errors ? `<b style="color:var(--err)">${o.info_errors}</b> <a href="#/admin/pending">去处理</a>` : 0}</div>
    <div>教师待补</div><div>${o.teacher_pending}</div><div>待审核撤回申请</div><div>${o.unlock_waiting} <a href="#/admin/unlock">去审核</a></div></div>
    <div class="row" style="margin-top:14px"><button class="primary" id="expAll">导出本学期全部成绩</button><a class="btn" href="#/">查看全部教学班</a></div>`;
   $("#expAll").onclick = () => download(`/api/admin/semesters/${sem.id}/export`);
@@ -722,27 +743,96 @@ function impMapping(info, sem) {
 async function adPending(el) {
   const sem = curSem(); if (!sem) return;
   const d = await api(`/api/admin/semesters/${sem.id}/pending`);
-  el.innerHTML = `<p>${esc(sem.name)} 共 <b>${d.students.length}</b> 名学生待确认：${Object.entries(d.summary).map(([k, v]) => `${esc(k)} ${v}`).join("，") || "无"}</p>
+  el.innerHTML = `<div class="${d.info_errors.length ? "notice err" : "notice info"}" style="margin-bottom:16px">
+    <h3 style="margin-top:0">教师标记“信息有误”${d.info_errors.length ? `：<b>${d.info_errors.length}</b> 条待处理` : "：暂无"}</h3>
+    ${d.info_errors.length ? `<table class="list"><tr><th>学号</th><th>姓名</th><th>教学班</th><th>教师</th><th>说明</th><th></th></tr>${d.info_errors.map((x) => `<tr><td>${esc(x.student_no)}</td><td>${esc(x.name)}</td><td>${esc(x.class_name)}</td><td>${esc(x.teacher)}</td><td>${esc(x.note)}</td><td><button class="link" data-edit2="${esc(x.student_no)}">去修改</button></td></tr>`).join("")}</table>` : `<p class="muted small" style="margin:0">教师在录入页标记的学生信息问题会出现在这里。</p>`}</div>
+    <p>${esc(sem.name)} 共 <b>${d.students.length}</b> 名学生待确认：${Object.entries(d.summary).map(([k, v]) => `${esc(k)} ${v}`).join("，") || "无"}</p>
     <div class="row"><input type="text" id="pSearch" placeholder="按学号、姓名或原因筛选" size="30"></div>
     <table class="list" style="margin-top:10px"><thead><tr><th>学号</th><th>姓名</th><th>性别</th><th>暂定标准档</th><th>原因</th><th>选课记录</th><th>操作</th></tr></thead><tbody id="pBody"></tbody></table>
     <h3>教师待补的教学班（${d.teacher_pending.length}）</h3>
     ${d.teacher_pending.length ? `<table class="list"><tr><th>教学班</th><th>当前教师</th><th>指定责任教师</th></tr>${d.teacher_pending.map((c) => `<tr><td>${esc(c.class_name)}（${esc(c.class_no)}）</td><td>${esc(c.teacher_name || "—")}</td>
-      <td><input type="text" placeholder="工号" size="10" data-tno="${c.id}"> <input type="text" placeholder="姓名" size="8" data-tname="${c.id}"> <button data-tset="${c.id}">指定</button></td></tr>`).join("")}</table>` : "<p class='muted'>无</p>"}
-    <h3>教师标记“信息有误”（${d.info_errors.length}）</h3>
-    ${d.info_errors.length ? `<table class="list"><tr><th>学号</th><th>姓名</th><th>教学班</th><th>教师</th><th>说明</th></tr>${d.info_errors.map((x) => `<tr><td>${esc(x.student_no)}</td><td>${esc(x.name)}</td><td>${esc(x.class_name)}</td><td>${esc(x.teacher)}</td><td>${esc(x.note)}</td></tr>`).join("")}</table>` : "<p class='muted'>无</p>"}`;
+      <td><input type="text" placeholder="工号" size="10" data-tno="${c.id}"> <input type="text" placeholder="姓名" size="8" data-tname="${c.id}"> <button data-tset="${c.id}">指定</button></td></tr>`).join("")}</table>` : "<p class='muted'>无</p>"}`;
   const draw = () => {
     const q = $("#pSearch").value.trim();
     $("#pBody").innerHTML = d.students.filter((s) => !q || (s.student_no + s.name + s.reasons.join("")).includes(q)).map((s) => `<tr>
       <td class="nw">${esc(s.student_no)}</td><td class="nw">${esc(s.name)}</td><td class="nw">${esc(s.gender)}</td><td class="nw">${s.grade_num ? `大${s.grade_num}，` : ""}${esc(s.band_label)}<div class="muted small">${esc(s.source)}</div></td>
       <td>${s.reasons.map((r) => `<div>${esc(r)}</div>`).join("")}</td>
-      <td>${s.enrollments.map((e) => `<div>${esc(e.class_name)}（${esc(e.teacher)}）上课年级 ${esc(e.grade_field || "空")}${s.enrollments.length > 1 ? (e.active ? ' <span class="tag">有效</span>' : ' <span class="tag err">已停用</span>') + (e.active && s.enrollments.filter((x) => x.active).length > 1 ? ` <button class="link" data-keep="${e.enrollment_id}" data-no="${s.student_no}">只保留这条</button>` : "") : ""}</div>`).join("")}</td>
-      <td class="nw"><button class="link" data-fix="${s.student_no}">确认标准档</button></td></tr>`).join("");
+      <td>${s.enrollments.map((e) => `<div>${esc(e.class_name)}（${esc(e.teacher)}）上课年级 ${esc(e.grade_field || "空")}</div>`).join("")}</td>
+      <td class="nw"><button class="link" data-edit="${s.student_no}">补全/修改信息</button><br><button class="link" data-fix="${s.student_no}">确认标准档</button></td></tr>`).join("");
     $$("[data-fix]", el).forEach((b) => (b.onclick = () => fixDialog(sem, d.students.find((s) => s.student_no === b.dataset.fix), () => adPending(el))));
-    $$("[data-keep]", el).forEach((b) => (b.onclick = async () => { await api(`/api/admin/semesters/${sem.id}/students/${b.dataset.no}/keep`, { method: "POST", body: { enrollment_id: Number(b.dataset.keep) } }); toast("已保留"); adPending(el); }));
+    $$("[data-edit]", el).forEach((b) => (b.onclick = () => studentEditor(sem, b.dataset.edit, () => adPending(el))));
   };
   $("#pSearch").oninput = draw; draw();
+  $$("[data-edit2]", el).forEach((b) => (b.onclick = () => studentEditor(sem, b.dataset.edit2, () => adPending(el))));
   $$("[data-tset]", el).forEach((b) => (b.onclick = async () => { try { await api(`/api/admin/classes/${b.dataset.tset}`, { method: "PATCH", body: { staff_no: $(`[data-tno="${b.dataset.tset}"]`).value, teacher_name: $(`[data-tname="${b.dataset.tset}"]`).value } }); toast("已指定"); adPending(el); } catch (e) { toast(e.message, true); } }));
 }
+async function adStudents(el) {
+  const sem = curSem(); if (!sem) return;
+  el.innerHTML = `<p class="muted small">按学号或姓名查找学生，补录或修改性别等基础信息，修改选课信息、调班、移出或加入教学班。所有修改都留痕；手动改过的信息之后重新导入表格时不会被覆盖。</p>
+    <div class="row"><input type="text" id="stQ" placeholder="学号或姓名（至少2个字）" size="28"><button id="stGo">查找</button><span class="spacer"></span><button id="stNew">按学号新增/打开</button></div>
+    <div id="stList" style="margin-top:10px"></div>`;
+  const go = async () => {
+    const q = $("#stQ").value.trim(); if (q.length < 2) return toast("至少输入2个字", true);
+    const d = await api(`/api/admin/semesters/${sem.id}/students?q=${encodeURIComponent(q)}`);
+    $("#stList").innerHTML = d.students.length ? `<table class="list"><tr><th>学号</th><th>姓名</th><th>性别</th><th>本学期教学班</th><th></th></tr>${d.students.map((x) => `<tr><td>${esc(x.student_no)}</td><td>${esc(x.name)}</td><td>${esc(x.gender)}</td><td>${esc(x.classes.join("、") || "—")}</td><td><button class="link" data-open="${esc(x.student_no)}">查看/修改</button></td></tr>`).join("")}</table>` : `<p class="muted">没有找到</p>`;
+    $$("[data-open]", el).forEach((b) => (b.onclick = () => studentEditor(sem, b.dataset.open, go)));
+  };
+  $("#stGo").onclick = go; $("#stQ").onkeydown = (e) => { if (e.key === "Enter") go(); };
+  $("#stNew").onclick = () => { const no = prompt("学号"); if (no && no.trim()) studentEditor(sem, no.trim(), () => {}); };
+}
+async function studentEditor(sem, no, done) {
+  let d;
+  try { d = await api(`/api/admin/semesters/${sem.id}/student/${encodeURIComponent(no)}`); } catch (e) { return toast(e.message, true); }
+  const st = d.student || {}; const sd = d.standard;
+  const classOpts = (sel) => d.classes.map((c) => `<option value="${c.id}" ${c.id === sel ? "selected" : ""}>${esc(c.label)}</option>`).join("");
+  const enrollRow = (e) => `<div class="card" style="padding:10px;margin:8px 0;${e.active ? "" : "opacity:.6"}" data-eid="${e.enrollment_id}">
+      <div class="row"><b>${esc(e.course_name)} · ${esc(e.class_name)}</b><span class="muted small">${esc(e.teacher || "教师待补")} · ${esc(e.class_status)}</span>
+        ${e.active ? "" : '<span class="tag err">已移出</span>'}${e.manual ? '<span class="tag">手动维护</span>' : ""}${e.info_error ? `<span class="tag err" title="${esc(e.info_error)}">教师标记信息有误：${esc(e.info_error)}</span>` : ""}</div>
+      ${e.active ? `<div class="map-grid" style="margin-top:8px;max-width:none;grid-template-columns:90px 1fr 90px 1fr">
+        <div>教学班</div><div style="grid-column:span 3"><select data-k="class_id" style="max-width:100%">${classOpts(e.class_id)}</select></div>
+        <div>姓名</div><div><input type="text" data-k="name" value="${esc(e.name)}"></div><div>上课班级</div><div><input type="text" data-k="class_label" value="${esc(e.class_label)}"></div>
+        <div>上课专业</div><div><input type="text" data-k="major" value="${esc(e.major)}"></div><div>上课年级</div><div><input type="text" data-k="grade_field" value="${esc(e.grade_field)}" placeholder="如 2025"></div>
+        <div>上课院系</div><div><input type="text" data-k="college" value="${esc(e.college)}"></div><div>上课校区</div><div><select data-k="campus">${["", "中关村校区", "通州校区"].map((x) => `<option ${x === e.campus ? "selected" : ""}>${x}</option>`).join("")}</select></div></div>
+        <div class="row" style="margin-top:8px"><span class="spacer"></span><button class="link" data-rm>移出该班</button><button data-save>保存这条选课</button></div>`
+      : `<div class="row" style="margin-top:6px"><span class="spacer"></span><button data-restore>恢复到该班</button></div>`}</div>`;
+  modal(`<h3>${esc(no)} ${esc(st.name || (d.enrollments[0] && d.enrollments[0].name) || "")}</h3>
+    ${sd ? `<p class="small">标准档：${sd.grade_num ? `大${sd.grade_num}，` : ""}${esc(sd.band_label)}（${esc(sd.source || "—")}）${sd.pending ? ` <span class="tag warn">待确认：${esc(sd.reasons.join("；"))}</span>` : ""}</p>` : ""}
+    <h4>学生基础信息${st.manual ? ' <span class="tag">手动维护</span>' : ""}${d.student ? "" : ' <span class="tag warn">学生基础数据中没有，保存后补录</span>'}</h4>
+    <div class="map-grid" style="max-width:none;grid-template-columns:90px 1fr 90px 1fr">
+      <div>性别 <span style="color:var(--err)">*</span></div><div><select id="sxG"><option value="">请选择</option><option value="M" ${st.gender === "M" ? "selected" : ""}>男</option><option value="F" ${st.gender === "F" ? "selected" : ""}>女</option></select></div>
+      <div>姓名</div><div><input type="text" id="sxN" value="${esc(st.name || (d.enrollments[0] && d.enrollments[0].name) || "")}"></div>
+      <div>学院</div><div><input type="text" id="sxC" value="${esc(st.college || (d.enrollments[0] && d.enrollments[0].college) || "")}"></div>
+      <div>专业</div><div><input type="text" id="sxM" value="${esc(st.major || "")}"></div>
+      <div>班级</div><div><input type="text" id="sxK" value="${esc(st.class_name || "")}"></div>
+      <div>年级</div><div><input type="text" id="sxY" value="${esc(st.grade || "")}"></div></div>
+    <div class="row" style="margin-top:8px"><span class="spacer"></span><button class="primary" id="sxSave">保存基础信息</button></div>
+    <h4>本学期选课（${d.enrollments.filter((e) => e.active).length}）</h4>
+    ${d.enrollments.map(enrollRow).join("") || '<p class="muted">本学期没有选课记录</p>'}
+    <h4>加入教学班</h4><div class="row"><select id="sxAdd" style="max-width:520px"><option value="">选择教学班</option>${classOpts(null)}</select><button id="sxAddBtn">加入</button></div>
+    <p class="muted small">调班时已录的成绩跟着学生转到新班，原班留一条“已移出”记录，避免以后重新导入时又被加回原班。</p>`, (el) => {
+    const reload = () => { done && done(); studentEditor(sem, no, done); };
+    $("#sxSave", el).onclick = async () => {
+      try { await api(`/api/admin/semesters/${sem.id}/student/${encodeURIComponent(no)}`, { method: "PUT", body: { gender: $("#sxG", el).value, name: $("#sxN", el).value, college: $("#sxC", el).value, major: $("#sxM", el).value, class_name: $("#sxK", el).value, grade: $("#sxY", el).value } }); toast("已保存，标准档与成绩已重算"); reload(); }
+      catch (e) { toast(e.message, true); }
+    };
+    $$("[data-eid]", el).forEach((box) => {
+      const eid = box.dataset.eid;
+      const sv = $("[data-save]", box), rm = $("[data-rm]", box), rs = $("[data-restore]", box);
+      if (sv) sv.onclick = async () => {
+        const body = {}; $$("[data-k]", box).forEach((x) => (body[x.dataset.k] = x.value)); body.class_id = Number(body.class_id);
+        try { await api(`/api/admin/enrollments/${eid}`, { method: "PATCH", body }); toast("已保存"); reload(); } catch (e) { toast(e.message, true); }
+      };
+      if (rm) rm.onclick = async () => { if (!confirm("把该生移出这个教学班？已录成绩会保留，可以再恢复。")) return; try { await api(`/api/admin/enrollments/${eid}`, { method: "DELETE" }); toast("已移出"); reload(); } catch (e) { toast(e.message, true); } };
+      if (rs) rs.onclick = async () => { try { await api(`/api/admin/enrollments/${eid}/restore`, { method: "POST" }); toast("已恢复"); reload(); } catch (e) { toast(e.message, true); } };
+    });
+    $("#sxAddBtn", el).onclick = async () => {
+      const cid = Number($("#sxAdd", el).value); if (!cid) return toast("请选择教学班", true);
+      try { await api(`/api/admin/semesters/${sem.id}/enrollments`, { method: "POST", body: { student_no: no, class_id: cid, name: $("#sxN", el).value, college: $("#sxC", el).value, major: $("#sxM", el).value } }); toast("已加入"); reload(); }
+      catch (e) { toast(e.message, true); }
+    };
+  });
+}
+
 function fixDialog(sem, s, done) {
   modal(`<h3>确认标准档：${esc(s.student_no)} ${esc(s.name)}</h3>
     <div class="kv"><div>待确认原因</div><div>${esc(s.reasons.join("；"))}</div><div>判定依据</div><div>${esc(Object.entries(s.detail || {}).map(([k, v]) => `${k}：${typeof v === "object" && v ? JSON.stringify(v) : v ?? "—"}`).join("；"))}</div></div>

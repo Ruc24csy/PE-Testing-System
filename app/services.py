@@ -11,6 +11,21 @@ from . import scoring
 from .models import (AuditLog, Enrollment, ScoreHistory, ScoreRecord, Semester, StandardSnapshot, Student,
                      TeachingClass, now)
 
+EXCELLENT_LINE = 89.5  # 总评四舍五入后≥90分即为优秀
+EXCELLENT_WARN = 0.30  # 班级优秀率超过30%提醒
+
+
+def is_excellent(total) -> bool:
+    return total is not None and total >= EXCELLENT_LINE
+
+
+def excellence(rows: list[dict]) -> dict:
+    n = len(rows)
+    ex = sum(1 for r in rows if is_excellent(r["total"]))
+    return {"excellent": ex, "roster": n, "rate": round(ex / n, 4) if n else 0.0,
+            "over": bool(n) and ex / n > EXCELLENT_WARN}
+
+
 INPUT_FIELDS = ("a_raw", "a_status", "b_raw", "b_status", "skill", "regular", "note")
 
 

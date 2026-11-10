@@ -71,6 +71,12 @@ def build_workbook(sem: Semester, sections: list[tuple[TeachingClass, list[dict]
         parts = [f"{s.get('label')} {s['weight'] * 100:g}%" for s in cfg["slots"]]
         parts += [f"运动技能评定 {cfg['skill_weight'] * 100:g}%", f"平时成绩 {cfg['regular_weight'] * 100:g}%"]
         info.append([f"权重配置 {c.class_no} {c.class_name}", "，".join(parts)])
+    from .services import excellence
+    for c, rows, _ in sections[:300]:
+        e = excellence(rows)
+        info.append([f"优秀率 {c.class_no} {c.class_name}",
+                     f"{e['rate'] * 100:.1f}%（总评≥89.5分 {e['excellent']} 人 / 全班 {e['roster']} 人）"
+                     + ("，超过30%" if e["over"] else "")])
     info.append(["导出时间", now().strftime("%Y-%m-%d %H:%M:%S")])
     info.append(["导出人", exporter])
     info.append(["口径", "折算分保留两位小数；体测小计保留两位小数；课程总成绩四舍五入保留一位小数。"

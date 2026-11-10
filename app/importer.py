@@ -283,9 +283,8 @@ def precheck(db: Session, kind: str, rows: list[dict], mapping: dict, semester: 
                 missing[(r["class_no"], r.get("class_name", ""))].append(r)
         if missing and classes:
             for (no, name), rs in missing.items():
-                rep.add("warn", f"教学班 {no} {name} 不在课程安排表中，按关闭班处理、不进入平台；仍有 {len(rs)} 名学生选中："
-                        + "、".join(f"{x.get('student_no')}{x.get('name', '')}" for x in rs[:10]),
-                        [x["_row"] for x in rs], "请体育部确认这些学生是否已转班", key="closed_class")
+                rep.add("info", f"教学班 {no} {name} 不在课程安排表中，按已关闭处理，不导入；其中的 {len(rs)} 条选课记录一并忽略",
+                        [x["_row"] for x in rs], key="closed_class")
         pair = Counter((r.get("student_no"), r.get("class_no")) for r in rows)
         dup = [r["_row"] for r in rows if pair[(r.get("student_no"), r.get("class_no"))] > 1]
         if dup:
@@ -296,11 +295,11 @@ def precheck(db: Session, kind: str, rows: list[dict], mapping: dict, semester: 
             per[r["student_no"]].add(r["class_no"])
         multi = {k for k, v in per.items() if len(v) > 1}
         if multi:
-            rep.add("warn", f"{len(multi)} 名学生对应多条选课记录，导入后进入待确认清单，由体育部确认保留哪一条",
+            rep.add("info", f"{len(multi)} 名学生同时选了多门体育课，每门课各自录成绩",
                     [r["_row"] for r in valid if r["student_no"] in multi], key="multi")
         blank = [r["_row"] for r in valid if not r.get("grade_field") or not r.get("class_label") or not r.get("major")]
         if blank:
-            rep.add("warn", f"{len(blank)} 条记录上课年级、上课班级或专业为空，允许导入，同时进入年级待确认清单", blank)
+            rep.add("info", f"{len(blank)} 条记录上课年级、上课班级或专业为空，照常导入，年级按学号推算", blank)
         badno = [r["_row"] for r in valid if not re.fullmatch(r"\d{10}", r["student_no"])]
         if badno:
             rep.add("warn", f"{len(badno)} 条记录学号不是10位，进入待确认清单", badno)
@@ -360,6 +359,8 @@ def commit(db: Session, kind: str, rows: list[dict], semester: Semester | None, 
                 s = Student(student_no=no)
                 db.add(s)
                 n_new += 1
+            elif s.manual:
+                continue  # 管理员手动改过的不覆盖
             s.name = r.get("name", "")
             s.gender = {"男": "M", "女": "F"}.get(r.get("gender", ""))
             s.college, s.class_name = r.get("college", ""), r.get("class_name", "")
@@ -443,6 +444,8 @@ def commit(db: Session, kind: str, rows: list[dict], semester: Semester | None, 
                 e = Enrollment(semester_id=semester.id, class_id=c.id, student_no=sno)
                 db.add(e)
                 added += 1
+            elif e.manual:
+                continue  # 管理员手动改过（含调走、移除）的不覆盖
             else:
                 updated += 1
             e.name, e.class_label, e.major = r.get("name", ""), r.get("class_label", ""), r.get("major", "")
@@ -450,7 +453,7 @@ def commit(db: Session, kind: str, rows: list[dict], semester: Semester | None, 
             e.campus, e.course_category = r.get("campus", ""), r.get("course_category", "")
             e.seq = i
             e.active = True if e.id is None else e.active
-        gone = [e for s, e in cur.items() if s not in incoming]
+        gone = [e for s, e in cur.items() if s not in incoming and not e.manual]
         scored = _has_scores(db, [e.id for e in gone])
         for e in gone:
             if e.id in scored:
