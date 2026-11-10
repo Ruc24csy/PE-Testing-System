@@ -158,17 +158,23 @@ async function viewHome(scope) {
 function fmtPeriods(p) { const m = String(p || "").match(/\d{2}/g); return m ? `第${m.map(Number).join("-")}节` : p || ""; }
 
 /* ------------------------------------------------------------ 录入界面 */
+const SAVE_EVERY = 60000;
 const SORTS = { no: "学号", name: "姓名", cls: "行政班", total: "总成绩（高→低）", missing: "未录入的在前" };
 async function viewClass(id) {
   const d = await api(`/api/classes/${id}`);
   const C = { id: Number(id), d, rows: d.rows, byId: new Map(d.rows.map((r) => [r.enrollment_id, r])), queue: new Map(), undo: [], sel: new Set(), filter: "", errors: new Map(), savedAt: null };
   state.cls = C;
   C.flush = () => flushQueue(C);
+  C.nextSave = Date.now() + SAVE_EVERY;
   restoreDraft(C);
   renderClass(C);
+  // 固定每分钟自动保存一次（保存不等于提交），右上角倒计时；离开本班时立即存掉剩下的修改
   clearInterval(state.autosave);
-  // 每分钟补存一次；平时改完一格不到 1 秒就会自动保存。保存不等于提交。
-  state.autosave = setInterval(() => { if (state.cls === C) flushQueue(C); else clearInterval(state.autosave); }, 60000);
+  state.autosave = setInterval(() => {
+    if (state.cls !== C) { clearInterval(state.autosave); flushQueue(C); return; }
+    if (Date.now() >= C.nextSave) { C.nextSave = Date.now() + SAVE_EVERY; flushQueue(C); }
+    paintSaveState(C);
+  }, 1000);
 }
 function draftKey(C) { return `draft:${state.me.staff_no}:${C.id}`; }
 function saveDraft(C) { localStorage.setItem(draftKey(C), JSON.stringify([...C.queue.values()])); }
@@ -226,6 +232,14 @@ function segSet(C, seg, text) {
 }
 
 function setSaveState(t) { const el = $("#saveState"); if (el) el.firstElementChild.textContent = t; }
+function paintSaveState(C) {
+  if (C._busy) return setSaveState("保存中…");
+  if (C._fail) return setSaveState(`保存失败，修改暂存在本机，${Math.max(0, Math.ceil((C.nextSave - Date.now()) / 1000))} 秒后重试`);
+  if (C.queue.size) return setSaveState(`${C.queue.size} 处修改未保存 · ${Math.max(0, Math.ceil((C.nextSave - Date.now()) / 1000))} 秒后自动保存`);
+  if (C.errors.size) return setSaveState(`有 ${C.errors.size} 处输入没通过检查（标红）`);
+  setSaveState(saveIdleText(C));
+}
+function commitActive(C) { const s = segOf(document.activeElement); if (s) commitSeg(C, s); }
 function saveIdleText(C) { return C.savedAt ? `已保存 ${C.savedAt}` : "所有修改都已保存"; }
 function submitText(C) { return C.d.class.status === "已提交" ? "已提交（已锁定）" : "未提交"; }
 function paintSubmitState(C) { const el = $("#saveState"); if (!el) return; el.lastElementChild.textContent = submitText(C); el.classList.toggle("done", C.d.class.status === "已提交"); }
@@ -237,11 +251,10 @@ function renderClass(C) {
   const wt = (k) => (cfg.slots.find((s) => s.key === k).weight * 100).toFixed(0);
   const pendingN = C.rows.filter((r) => r.pending || !r.gender_code).length;
   const sortBy = localStorage.getItem("classSort") || "no";
-  const showOpt = localStorage.getItem("showOpt") === "1";
   $("#app").innerHTML = `
   <div class="card">
     <div class="row"><a href="#/">← 返回教学班列表</a><span class="spacer"></span>
-      <span class="save-pill" id="saveState"><span>${C.queue.size ? "有未保存的修改…" : saveIdleText(C)}</span> · <span></span></span></div>
+      <span class="save-pill" id="saveState"><span></span> · <span></span></span></div>
     <h2 style="margin-top:8px">${esc(c.class_name)}</h2>
     <div class="row muted">${esc(c.course_name)} · ${esc(c.weekday)} ${esc(fmtPeriods(c.periods))} · ${esc(c.location)} · ${C.rows.length} 人
       <details class="more-info"><summary>班级信息</summary><div class="class-head">
@@ -258,7 +271,6 @@ function renderClass(C) {
       <span class="spacer"></span>
       <details class="menu" id="moreMenu"><summary class="btn">更多操作 ▾</summary><div class="menu-body">
         <label><input type="checkbox" id="fIssue"> 只看有问题的学生</label>
-        <label><input type="checkbox" id="fOpt" ${showOpt ? "checked" : ""}> 显示学院、专业、行政班、标准档</label>
         ${d.editable ? `<div class="menu-sec">给勾选的学生设置特殊情况<div class="row"><select id="batchSlot"><option value="a_status">${esc(lab("a"))}</option><option value="b_status">${esc(lab("b"))}</option></select>
           <select id="batchStatus">${d.statuses.map((s) => `<option value="${s}">${s === "正常" ? "正常（取消特殊情况）" : s}</option>`).join("")}</select><button id="batchBtn">设置</button></div></div>` : ""}
         <button id="exportBtn">导出 Excel</button>
@@ -269,7 +281,7 @@ function renderClass(C) {
     </div>
     <div class="muted small">填完一格按回车，先到右边一格，一行填完再到下一位学生；↑↓ 上下换格。耐力跑填完“分”会自动跳到“秒”。修改会自动保存，确认无误后再点“提交成绩”。免测、缺考等特殊情况点每行的“更多”。</div>
   </div>
-  <div class="grid-wrap"><table class="grid ${showOpt ? "" : "compact"}" id="grid">
+  <div class="grid-wrap"><table class="grid" id="grid">
     <thead><tr>
       <th rowspan="2" class="sticky"><input type="checkbox" id="selAll" title="全选"></th>
       <th rowspan="2" class="sticky2">学号</th><th rowspan="2" class="sticky3">姓名</th><th rowspan="2">性别</th><th rowspan="2" class="opt">学院</th><th rowspan="2" class="opt">专业</th><th rowspan="2" class="opt">行政班</th><th rowspan="2" class="opt">年级/标准档</th>
@@ -277,7 +289,7 @@ function renderClass(C) {
       <th rowspan="2">体测小计</th><th rowspan="2">运动技能</th><th rowspan="2">平时成绩</th><th rowspan="2">总成绩</th><th rowspan="2"></th>
     </tr><tr>${["a", "b"].map(() => `<th>成绩</th><th>得分</th>`).join("")}</tr></thead>
     <tbody></tbody></table></div>`;
-  paintSubmitState(C);
+  paintSubmitState(C); paintSaveState(C);
   renderRows(C);
   bindClass(C);
 }
@@ -325,7 +337,7 @@ function rowHtml(C, r, no) {
     const sp = segSpec(C, slot ? slot.item : null, field); const parts = sp.split(val);
     // 不在格子下面加说明，免得行高跟着变；错误原因放在鼠标悬停提示里
     const tip = err || (slot && !r.gender_code ? "性别待确认，暂不能录入" : (slot && slot.item_label) || "");
-    const inputs = sp.segs.map((s, i) => `<input class="sg" data-i="${i}" value="${esc(parts[i] ?? "")}" style="width:${Math.max(s.n, 1) + 0.9}ch" maxlength="${s.max || s.n}" inputmode="${s.dec ? "decimal" : "numeric"}" ${ro ? "readonly" : ""} autocomplete="off"><span class="sx">${esc(s.after)}</span>`).join("");
+    const inputs = sp.segs.map((s, i) => `<input class="sg" data-i="${i}" value="${esc(parts[i] ?? "")}" style="width:${(s.max || s.n) > s.n && !s.neg && s.after.startsWith("/") ? s.n + 3 : Math.max(s.n, 1) + 0.9}ch" maxlength="${s.max || s.n}" inputmode="${s.dec ? "decimal" : "numeric"}" ${ro ? "readonly" : ""} autocomplete="off"><span class="sx">${esc(s.after)}</span>`).join("");
     return `<td class="in ${err ? "bad" : ""} ${ro ? "ro" : ""}"><div class="seg" data-e="${r.enrollment_id}" data-f="${field}" title="${esc(tip)}">${inputs}</div></td>`;
   };
   const scoreCell = (k) => {
@@ -357,14 +369,13 @@ function enqueue(C, eid, field, value, { undo = true } = {}) {
   if (undo) C.undo.push({ eid, field, value: old });
   C.queue.set(key, { enrollment_id: eid, field, value });
   saveDraft(C);
-  setSaveState("有未保存的修改…");
-  clearTimeout(C._t); C._t = setTimeout(() => flushQueue(C), 400);
+  paintSaveState(C);
 }
 async function flushQueue(C) {
   if (!C.queue.size || C._busy) return;
   C._busy = true;
   const items = [...C.queue.values()]; C.queue.clear();
-  setSaveState("保存中…");
+  paintSaveState(C);
   try {
     const res = await api(`/api/classes/${C.id}/cells`, { method: "POST", body: { changes: items } });
     const warns = [];
@@ -379,16 +390,16 @@ async function flushQueue(C) {
     refreshRows(C, new Set(items.map((i) => i.enrollment_id)));
     const nErr = res.results.filter((x) => !x.ok).length;
     C.savedAt = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
-    setSaveState(nErr ? `有 ${nErr} 处输入没通过检查（标红）` : C.queue.size ? "有未保存的修改…" : saveIdleText(C));
+    C._fail = false;
     const firstErr = res.results.find((x) => !x.ok);
     if (firstErr) toast(`${C.byId.get(firstErr.enrollment_id).name}：${firstErr.error}`, true);
     else if (warns.length) toast(warns.slice(0, 3).join("；"));
   } catch (e) {
     for (const it of items) if (!C.queue.has(`${it.enrollment_id}:${it.field}`)) C.queue.set(`${it.enrollment_id}:${it.field}`, it);
     saveDraft(C);
-    setSaveState("保存失败，修改已暂存在本机，网络恢复后自动保存");
+    C._fail = true;
     toast(e.message, true);
-  } finally { C._busy = false; if (C.queue.size) setTimeout(() => flushQueue(C), 1500); }
+  } finally { C._busy = false; paintSaveState(C); }
 }
 function refreshRows(C, ids) {
   // 重画行时保住正在输入的那一格：焦点、已经打进去还没离开的数字
@@ -504,7 +515,6 @@ function bindClass(C) {
   };
   document.onclick = (e) => { const m = $("#moreMenu"); if (m && m.open && !m.contains(e.target)) m.open = false; };
   $("#selAll").onchange = (e) => { const ids = $$("#grid .rowSel").map((x) => Number(x.dataset.e)); ids.forEach((id) => (e.target.checked ? C.sel.add(id) : C.sel.delete(id))); renderRows(C); };
-  $("#fOpt").onchange = (e) => { localStorage.setItem("showOpt", e.target.checked ? "1" : "0"); $("#grid").classList.toggle("compact", !e.target.checked); };
   $("#sortBy").onchange = (e) => { localStorage.setItem("classSort", e.target.value); renderRows(C); };
   $("#fMissing").onchange = () => renderRows(C); $("#fIssue").onchange = () => renderRows(C);
   const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
@@ -515,14 +525,15 @@ function bindClass(C) {
     $("#moreMenu").open = false;
     toast(`已将 ${C.sel.size} 人设为“${s}”`);
   });
-  on("#saveBtn", async () => { $$("#grid .seg").forEach((s) => s.contains(document.activeElement) && commitSeg(C, s)); clearTimeout(C._t); await flushQueue(C); if (!C.queue.size && !C.errors.size) toast("已保存（还没有提交）"); });
-  on("#exportBtn", async () => { await flushQueue(C); download(`/api/classes/${C.id}/export`); });
+  on("#saveBtn", async () => { commitActive(C); C.nextSave = Date.now() + SAVE_EVERY; await flushQueue(C); if (!C.queue.size && !C.errors.size) toast("已保存（还没有提交）"); });
+  on("#exportBtn", async () => { commitActive(C); await flushQueue(C); download(`/api/classes/${C.id}/export`); });
   on("#tplBtn", () => download(`/api/classes/${C.id}/template`));
   on("#uploadBtn", () => uploadDialog(C));
   on("#submitBtn", () => submitDialog(C));
   on("#unlockBtn", () => unlockDialog(C));
   on("#cfgBtn", () => configDialog(C));
-  window.onbeforeunload = () => (C.queue.size ? "还有未保存的修改" : undefined);
+  // 关页面时修改已暂存在本机，下次打开自动补存；这里再提醒一次
+  window.onbeforeunload = () => { commitActive(C); return C.queue.size ? "还有未保存的修改" : undefined; };
 }
 
 function showExplain(C, eid, k) {
@@ -577,6 +588,8 @@ async function rowMenu(C, eid) {
 }
 
 async function submitDialog(C) {
+  commitActive(C);
+  while (C._busy) await new Promise((ok) => setTimeout(ok, 100));
   await flushQueue(C);
   const ck = await api(`/api/classes/${C.id}/check`);
   const sec = (title, list, tip) => `<h4>${title}（${list.length}）</h4>${list.length ? `<ul>${list.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : `<p class="muted small">无</p>`}${tip && list.length ? `<p class="small muted">${tip}</p>` : ""}`;
