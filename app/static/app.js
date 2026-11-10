@@ -76,7 +76,7 @@ function renderTop() {
   $("#userBox").innerHTML = me ? `<span>${esc(me.name || "")} ${esc(me.staff_no)}${me.is_admin ? " · 体育部" : ""}</span><button id="logoutBtn">退出</button>` : "";
   if (me) $("#logoutBtn").onclick = async () => { const r = await api("/auth/logout", { method: "POST" }); state.me = null; state.semesters = []; location.href = r.redirect === "/" ? "/#/login" : r.redirect; };
   const h = location.hash;
-  $("#nav").innerHTML = me ? `<a href="#/" class="${!h.startsWith("#/admin") ? "on" : ""}">${me.is_admin ? "教学班" : "我的教学班"}</a>` + (me.is_admin ? `<a href="#/admin" class="${h.startsWith("#/admin") ? "on" : ""}">体育部管理</a>` : "") : "";
+  $("#nav").innerHTML = me ? `<a href="#/" class="${!h.startsWith("#/admin") ? "on" : ""}">我的教学班</a>` + (me.is_admin ? `<a href="#/admin" class="${h.startsWith("#/admin") ? "on" : ""}">体育部管理</a>` : "") : "";
   const sp = $("#semPicker");
   sp.hidden = !me || !state.semesters.length || h.startsWith("#/class");
   $("#semSelect").innerHTML = state.semesters.map((s) => `<option value="${s.id}" ${s.id === state.semId ? "selected" : ""}>${esc(s.name)}${s.is_current ? "（本学期）" : ""}</option>`).join("");
@@ -132,7 +132,7 @@ async function viewHome(scope) {
     return;
   }
   const filt = JSON.parse(sessionStorage.getItem("classFilter") || "{}");
-  const all = state.me.is_admin && filt.scope !== "mine";  // 管理员默认看全部教学班
+  const all = state.me.is_admin && filt.scope === "all";
   const q = new URLSearchParams({ course: filt.course || "", campus: filt.campus || "", scope: all ? "all" : "mine" });
   const d = await api(`/api/semesters/${sem.id}/classes?${q}`);
   const readonly = !sem.is_current && !sem.entry_open;
@@ -148,11 +148,11 @@ async function viewHome(scope) {
     <span class="spacer"></span>
     <select id="fCourse"><option value="">全部课程</option>${d.courses.map((c) => `<option ${c === filt.course ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
     <select id="fCampus"><option value="">全部校区</option>${["中关村校区", "通州校区"].map((c) => `<option ${c === filt.campus ? "selected" : ""}>${c}</option>`).join("")}</select>
-    ${state.me.is_admin ? `<label><input type="checkbox" id="fMine" ${all ? "" : "checked"}> 只看我教的班</label>` : ""}</div>
+    ${state.me.is_admin ? `<label><input type="checkbox" id="fAll" ${all ? "checked" : ""}> 显示全部教学班</label>` : ""}</div>
     ${readonly ? `<div class="notice info" style="margin-top:12px">以往学期为只读。如需补录或更正，请联系体育部开放该学期的录入窗口。</div>` : ""}
     <div style="margin-top:12px">${body}</div></div>`;
-  const save = () => { sessionStorage.setItem("classFilter", JSON.stringify({ course: $("#fCourse").value, campus: $("#fCampus").value, scope: $("#fMine") && $("#fMine").checked ? "mine" : "all" })); viewHome(); };
-  $("#fCourse").onchange = save; $("#fCampus").onchange = save; if ($("#fMine")) $("#fMine").onchange = save;
+  const save = () => { sessionStorage.setItem("classFilter", JSON.stringify({ course: $("#fCourse").value, campus: $("#fCampus").value, scope: $("#fAll") && $("#fAll").checked ? "all" : "mine" })); viewHome(); };
+  $("#fCourse").onchange = save; $("#fCampus").onchange = save; if ($("#fAll")) $("#fAll").onchange = save;
   $$("tr.clickable").forEach((tr) => (tr.onclick = (e) => { if (e.target.tagName !== "A") location.hash = `#/class/${tr.dataset.id}`; }));
 }
 const EXCELLENT_LINE = 89.5;   // 总评四舍五入后≥90分即为优秀
@@ -553,6 +553,7 @@ async function adOverview(el) {
    <div>教师待补</div><div>${o.teacher_pending}</div><div>待审核撤回申请</div><div>${o.unlock_waiting} <a href="#/admin/unlock">去审核</a></div></div>
    <div class="row" style="margin-top:14px"><button class="primary" id="expAll">导出本学期全部成绩</button><a class="btn" href="#/">查看全部教学班</a></div>`;
   $("#expAll").onclick = () => download(`/api/admin/semesters/${sem.id}/export`);
+  sessionStorage.setItem("classFilter", JSON.stringify({ scope: "all" }));
 }
 async function adSemesters(el) {
   const sems = await api("/api/semesters");
