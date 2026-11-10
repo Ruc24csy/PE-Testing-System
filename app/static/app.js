@@ -90,7 +90,7 @@ async function viewLogin() {
   const errs = { sso: "统一身份认证未通过，请重试。", expired: "登录请求已失效，请重新点击登录。", unavailable: "统一身份认证服务暂时不可用，请稍后再试。", category: "本平台仅供任课教师和体育部使用。" };
   const em = location.hash.match(/error=(\w+)/);
   const err = em && errs[em[1]] ? `<div class="notice err">${errs[em[1]]}</div>` : "";
-  $("#app").innerHTML = `<div class="login"><div class="card"><h2>登录</h2>${err}
+  $("#app").innerHTML = `<div class="login"><div class="card"><div class="login-brand"><img src="/static/logo.svg" alt=""><div>体育成绩录入平台<div class="muted small">中国人民大学体育部</div></div></div><h2>登录</h2>${err}
     ${mode.mode === "sso" ? `<p>使用数字人大统一身份认证（职工号与密码）登录。</p><a class="btn primary" href="/auth/login">统一身份认证登录</a>` : ""}
     ${mode.mode === "dev" ? `<div class="notice info">当前为开发测试模式：输入工号即可登录。正式部署时改为数字人大统一身份认证。</div>
        <label>工号<input type="text" id="devNo" lang="en" inputmode="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus></label><button class="primary" id="devBtn">登录</button>` : ""}

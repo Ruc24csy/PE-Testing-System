@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="体育成绩录入平台">
+  <rect width="64" height="64" rx="15" fill="#a61d24"/>
+  <!-- 跑道：两条弯道 -->
+  <rect x="9" y="15" width="46" height="34" rx="17" fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="3"/>
+  <rect x="15.5" y="21.5" width="33" height="21" rx="10.5" fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="2.5"/>
+  <!-- 对勾：成绩录好了 -->
+  <path d="M20 33.5l8 8L45 22" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="45" cy="22" r="3.6" fill="#f6c343"/>
+</svg>
