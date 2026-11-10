@@ -37,7 +37,9 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     u = db.get(User, staff_no)
     if u is None:
         raise HTTPException(401, "请先登录")
-    if u.must_change_password and request.url.path not in ("/api/me", "/api/me/password", "/auth/logout"):
+    # 只有用平台口令登录时才强制改初始口令；统一认证或开发登录不经过口令
+    if u.must_change_password and request.session.get("via") == "local" \
+            and request.url.path not in ("/api/me", "/api/me/password", "/auth/logout"):
         raise HTTPException(403, "首次登录请先修改初始口令")
     return u
 

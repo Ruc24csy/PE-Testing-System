@@ -140,6 +140,7 @@ def local_login(request: Request, staff_no: str = Body(...), password: str = Bod
     auth.record_attempt(db, staff_no, ip, True)
     request.session.clear()
     request.session["staff_no"] = u.staff_no
+    request.session["via"] = "local"
     services.log(db, u.staff_no, "登录", ip=ip, method="local")
     db.commit()
     return {"ok": True, "must_change_password": u.must_change_password}
@@ -152,9 +153,10 @@ def logout(request: Request):
 
 
 @app.get("/api/me")
-def me(u: User = Depends(current_user)):
+def me(request: Request, u: User = Depends(current_user)):
     return {"staff_no": u.staff_no, "name": u.name, "is_admin": is_admin(u),
-            "must_change_password": u.must_change_password, "auth_mode": config.AUTH_MODE}
+            "must_change_password": u.must_change_password and request.session.get("via") == "local",
+            "auth_mode": config.AUTH_MODE}
 
 
 @app.post("/api/me/password")
