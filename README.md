@@ -29,8 +29,6 @@ PE_ADMIN_STAFF_NOS=admin .venv/bin/uvicorn app.main:app --port 8000
 
 打开 http://127.0.0.1:8000 ，开发模式下输入工号即可登录（`admin` 为管理员）。到“体育部管理 → 学期管理”新建学期，再到“课程信息导入”依次导入学生基础数据表、课程安排表、学生选课表。
 
-用 Docker 本地试用：`docker compose up -d --build`，打开 http://127.0.0.1:8000 。更新代码后要带 `--build` 重新构建，否则容器里跑的还是旧代码。
-
 也可以用命令一次导入三张表：
 
 ```bash

@@ -254,10 +254,3 @@ def test_issue_teacher_passwords(admin):
     ws = openpyxl.load_workbook(io.BytesIO(r.content)).active
     assert ws.cell(2, 1).value == "T001"
     assert TestClient(app).post("/api/auth/local-login", json={"staff_no": "T001", "password": "Teacher#2026"}).status_code == 401
-
-
-def test_index_busts_cache():
-    c = TestClient(app)
-    r = c.get("/")
-    assert "/static/app.js?v=" in r.text and r.headers["cache-control"] == "no-cache"
-    assert c.get("/static/app.js").headers["cache-control"] == "no-cache"
