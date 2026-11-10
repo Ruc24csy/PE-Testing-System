@@ -105,3 +105,4 @@ details.menu{position:relative}details.menu summary{list-style:none;cursor:point
 .menu-sec{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:8px 0;width:100%}
 table.grid td.in.bad .seg{background:var(--errbg);border-radius:3px}
 .bonus{margin-left:3px}
+table.grid th.sticky,table.grid td.sticky{width:42px;min-width:42px;max-width:42px;text-align:center}

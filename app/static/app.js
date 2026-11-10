@@ -246,7 +246,6 @@ function paintSubmitState(C) { const el = $("#saveState"); if (!el) return; el.l
 
 function renderClass(C) {
   const { d } = C; const c = d.class; const cfg = d.config; const sem = d.semester;
-  const lab = (k) => cfg.slots.find((s) => s.key === k).label;
   const itemName = (k) => { const l = d.config_labels[k]; return l.M === l.F ? l.M : `${l.M}/${l.F}`; };
   const wt = (k) => (cfg.slots.find((s) => s.key === k).weight * 100).toFixed(0);
   const pendingN = C.rows.filter((r) => r.pending || !r.gender_code).length;
@@ -267,15 +266,10 @@ function renderClass(C) {
     <div class="toolbar">
       <label>排序 <select id="sortBy">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}" ${k === sortBy ? "selected" : ""}>${v}</option>`).join("")}</select></label>
       <label><input type="checkbox" id="fMissing"> 只看未录入</label>
-      <span class="muted small" id="selInfo"></span>
+      <label><input type="checkbox" id="fIssue"> 只看有问题的学生</label>
       <span class="spacer"></span>
-      <details class="menu" id="moreMenu"><summary class="btn">更多操作 ▾</summary><div class="menu-body">
-        <label><input type="checkbox" id="fIssue"> 只看有问题的学生</label>
-        ${d.editable ? `<div class="menu-sec">给勾选的学生设置特殊情况<div class="row"><select id="batchSlot"><option value="a_status">${esc(lab("a"))}</option><option value="b_status">${esc(lab("b"))}</option></select>
-          <select id="batchStatus">${d.statuses.map((s) => `<option value="${s}">${s === "正常" ? "正常（取消特殊情况）" : s}</option>`).join("")}</select><button id="batchBtn">设置</button></div></div>` : ""}
-        <button id="exportBtn">导出 Excel</button>
-        ${d.editable ? `<button id="tplBtn">下载录入模板</button><button id="uploadBtn">用模板整班上传</button>` : ""}
-      </div></details>
+      <button id="exportBtn">导出 Excel</button>
+      ${d.editable ? `<button id="tplBtn">下载录入模板</button><button id="uploadBtn">用模板整班上传</button>` : ""}
       ${d.editable ? `<button id="saveBtn" title="平时会自动保存，这里可以立即保存一次">保存</button><button class="primary" id="submitBtn" title="提交后成绩锁定，交给体育部">提交成绩</button>` : ""}
       ${c.status === "已提交" && (!d.unlock_request || d.unlock_request.status !== "待审核") ? `<button id="unlockBtn">申请撤回</button>` : ""}
     </div>
@@ -283,7 +277,7 @@ function renderClass(C) {
   </div>
   <div class="grid-wrap"><table class="grid" id="grid">
     <thead><tr>
-      <th rowspan="2" class="sticky"><input type="checkbox" id="selAll" title="全选"></th>
+      <th rowspan="2" class="sticky">序号</th>
       <th rowspan="2" class="sticky2">学号</th><th rowspan="2" class="sticky3">姓名</th><th rowspan="2">性别</th><th rowspan="2" class="opt">学院</th><th rowspan="2" class="opt">专业</th><th rowspan="2" class="opt">行政班</th><th rowspan="2" class="opt">年级/标准档</th>
       ${["a", "b"].map((k) => `<th colspan="2">${esc(itemName(k))}<span class="qm" data-std="${k}" title="查看评分表与加分规则">?</span></th>`).join("")}
       <th rowspan="2">体测小计</th><th rowspan="2">运动技能</th><th rowspan="2">平时成绩</th><th rowspan="2">总成绩</th><th rowspan="2"></th>
@@ -320,7 +314,6 @@ function sortedRows(C) {
 function renderRows(C) {
   const tb = $("#grid tbody");
   tb.innerHTML = sortedRows(C).filter((r) => rowVisible(C, r)).map((r, i) => rowHtml(C, r, i + 1)).join("") || `<tr><td colspan="24" class="muted" style="padding:20px">没有符合条件的学生</td></tr>`;
-  updateSelInfo(C);
 }
 function rowHtml(C, r, no) {
   const ed = C.d.editable;
@@ -350,8 +343,8 @@ function rowHtml(C, r, no) {
   if (r.flags.includes("band_changed")) flags.push(`<span class="tag warn" title="体育部已变更该生标准档">档已变更</span>`);
   if (r.info_error) flags.push(`<span class="tag err" title="${esc(r.info_error)}">信息有误</span>`);
   if (r.sudden.length) flags.push(`<span class="tag warn" title="${esc(r.sudden.join("；"))}">突变</span>`);
-  return `<tr data-e="${r.enrollment_id}" data-no="${no}" class="${r.pending || !r.gender_code ? "pending" : ""} ${C.sel.has(r.enrollment_id) ? "selected" : ""}">
-    <td class="sticky lock"><input type="checkbox" class="rowSel" data-e="${r.enrollment_id}" ${C.sel.has(r.enrollment_id) ? "checked" : ""}> ${no}</td>
+  return `<tr data-e="${r.enrollment_id}" data-no="${no}" class="${r.pending || !r.gender_code ? "pending" : ""}">
+    <td class="sticky lock num">${no}</td>
     <td class="sticky2 lock">${esc(r.student_no)}</td><td class="sticky3 lock">${esc(r.name)} ${flags.join(" ")}</td><td class="lock">${esc(r.gender)}</td>
     <td class="lock trunc opt" title="${esc(r.college)}">${esc(r.college)}</td><td class="lock trunc opt" title="${esc(r.major)}">${esc(r.major)}</td><td class="lock trunc opt" title="${esc(r.class_label)}">${esc(r.class_label)}</td>
     <td class="lock opt">${r.grade_num ? `大${r.grade_num}` : ""} ${esc(r.band_label)}</td>
@@ -435,7 +428,6 @@ function nextInRow(seg, d) {
   const segs = $$("#grid .seg").filter((s) => g.includes(s.dataset.f));
   for (let i = segs.indexOf(seg) + d; i >= 0 && i < segs.length; i += d) if (focusSeg(segs[i])) return;
 }
-function updateSelInfo(C) { const el = $("#selInfo"); if (el) el.textContent = C.sel.size ? `已勾选 ${C.sel.size} 人` : ""; }
 function commitSeg(C, seg) {
   if (!seg || !C.d.editable || !$("input.sg", seg) || $("input.sg", seg).readOnly) return;
   const val = segValue(C, seg);
@@ -453,10 +445,6 @@ function bindClass(C) {
   grid.addEventListener("focusout", (e) => {
     const seg = segOf(e.target); if (!seg || !seg.isConnected || seg.contains(e.relatedTarget)) return;
     commitSeg(C, seg);
-  });
-  grid.addEventListener("change", (e) => {
-    const t = e.target;
-    if (t.classList.contains("rowSel")) { const id = Number(t.dataset.e); t.checked ? C.sel.add(id) : C.sel.delete(id); t.closest("tr").classList.toggle("selected", t.checked); updateSelInfo(C); }
   });
   grid.addEventListener("input", (e) => {
     const t = e.target; const seg = segOf(t); if (!seg || !t.classList.contains("sg")) return;
@@ -513,18 +501,9 @@ function bindClass(C) {
       toast("已撤销上一次修改");
     }
   };
-  document.onclick = (e) => { const m = $("#moreMenu"); if (m && m.open && !m.contains(e.target)) m.open = false; };
-  $("#selAll").onchange = (e) => { const ids = $$("#grid .rowSel").map((x) => Number(x.dataset.e)); ids.forEach((id) => (e.target.checked ? C.sel.add(id) : C.sel.delete(id))); renderRows(C); };
   $("#sortBy").onchange = (e) => { localStorage.setItem("classSort", e.target.value); renderRows(C); };
   $("#fMissing").onchange = () => renderRows(C); $("#fIssue").onchange = () => renderRows(C);
   const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
-  on("#batchBtn", () => {
-    if (!C.sel.size) return toast("请先在表格最左边勾选学生", true);
-    const f = $("#batchSlot").value, s = $("#batchStatus").value;
-    for (const id of C.sel) enqueue(C, id, f, s);
-    $("#moreMenu").open = false;
-    toast(`已将 ${C.sel.size} 人设为“${s}”`);
-  });
   on("#saveBtn", async () => { commitActive(C); C.nextSave = Date.now() + SAVE_EVERY; await flushQueue(C); if (!C.queue.size && !C.errors.size) toast("已保存（还没有提交）"); });
   on("#exportBtn", async () => { commitActive(C); await flushQueue(C); download(`/api/classes/${C.id}/export`); });
   on("#tplBtn", () => download(`/api/classes/${C.id}/template`));
