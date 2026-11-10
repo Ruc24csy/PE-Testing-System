@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="体育成绩录入平台">
+  <rect width="64" height="64" rx="15" fill="#a61d24"/>
+  <!-- 秒表：体测计时 -->
+  <rect x="28" y="6" width="8" height="5" rx="1.5" fill="#fff"/>
+  <path d="M44.5 13.5l3-3" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>
+  <circle cx="32" cy="35" r="19" fill="none" stroke="#fff" stroke-width="4.5"/>
+  <!-- 对勾：成绩录好了 -->
+  <path d="M23.5 35.5l6 6 11-12" fill="none" stroke="#f6c343" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

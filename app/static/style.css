@@ -106,3 +106,8 @@ details.menu{position:relative}details.menu summary{list-style:none;cursor:point
 table.grid td.in.bad .seg{background:var(--errbg);border-radius:3px}
 .bonus{margin-left:3px}
 table.grid th.sticky,table.grid td.sticky{width:42px;min-width:42px;max-width:42px;text-align:center}
+
+.brand a{display:flex;align-items:center;gap:9px}
+.brand-logo{width:30px;height:30px;border-radius:8px;box-shadow:0 0 0 2px #ffffff55}
+.login-brand{display:flex;align-items:center;gap:12px;font-size:18px;font-weight:700;margin-bottom:18px}
+.login-brand img{width:48px;height:48px}
