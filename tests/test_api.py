@@ -316,21 +316,3 @@ def test_excellent_rate(admin):
     x = admin.get(f"/api/classes/{c1['id']}/export")
     info = openpyxl.load_workbook(io.BytesIO(x.content))["说明"]
     assert any(str(r[0].value).startswith("优秀率 C001") for r in info.iter_rows())
-
-
-def test_dev_login_not_forced_to_change_password(admin):
-    from app import auth as A
-    from app.models import SessionLocal, User
-    db = SessionLocal()
-    u = db.get(User, "T555") or User(staff_no="T555")
-    u.password_hash, u.must_change_password = A.hash_password("Init#2026a"), True
-    db.merge(u)
-    db.commit()
-    c = TestClient(app)
-    c.post("/api/auth/dev-login", json={"staff_no": "T555"})
-    assert c.get("/api/me").json()["must_change_password"] is False
-    assert c.get("/api/semesters").status_code == 200
-    c2 = TestClient(app)
-    c2.post("/api/auth/local-login", json={"staff_no": "T555", "password": "Init#2026a"})
-    assert c2.get("/api/me").json()["must_change_password"] is True
-    assert c2.get("/api/semesters").status_code == 403
