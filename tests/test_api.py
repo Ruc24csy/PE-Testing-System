@@ -40,7 +40,7 @@ ENROLL = [["学年学期", "学号", "姓名", "上课班级", "上课专业", "
           ["2026-2027-1", "2026200001", "张一", "2026法学1班", "法学", "2026", "法学院", "C001", "乒乓球10班", "张老师", "乒乓球", "公共体育", "中关村校区"],
           ["2026-2027-1", "2025200002", "李二", "2025经济1班", "经济学", "2025", "经济学院", "C001", "乒乓球10班", "张老师", "乒乓球", "公共体育", "中关村校区"],
           ["2026-2027-1", "2023200003", "王三", "2023信息1班", "计算机", "2023", "信息学院", "C001", "乒乓球10班", "张老师", "乒乓球", "公共体育", "中关村校区"],
-          # 2024级随2025级上课：以学号推算为准（大三，大三大四标准），不进待确认
+          # 2024级随2025级上课（降级）：按上课年级算大二（大一大二标准），不进待确认
           ["2026-2027-1", "2024200004", "赵四", "2025统计1班", "统计学", "2025", "统计学院", "C001", "乒乓球10班", "张老师", "乒乓球", "公共体育", "中关村校区"],
           # 学生基础数据里没有 → 性别未知，待确认
           ["2026-2027-1", "2025200005", "钱五", "2025经济1班", "经济学", "2025", "经济学院", "C001", "乒乓球10班", "张老师", "乒乓球", "公共体育", "中关村校区"],
@@ -113,8 +113,8 @@ def test_full_flow(admin, teacher):
     d = teacher.get(f"/api/classes/{cid}").json()
     rows = {r["student_no"]: r for r in d["rows"]}
     assert rows["2026200001"]["band"] == "12" and rows["2023200003"]["band"] == "34"
-    assert not rows["2024200004"]["pending"] and rows["2024200004"]["band"] == "34"  # 按学号推算
-    assert rows["2024200004"]["band_source"] == "学号推算"
+    assert not rows["2024200004"]["pending"] and rows["2024200004"]["band"] == "12"  # 按上课年级
+    assert rows["2024200004"]["band_source"] == "上课年级"
     assert not rows["2026200001"]["pending"]  # 一人多课不算异常
     assert rows["2025200005"]["pending"] and rows["2025200005"]["gender_code"] is None
     e1, e2, e3 = rows["2026200001"]["enrollment_id"], rows["2025200002"]["enrollment_id"], rows["2023200003"]["enrollment_id"]
@@ -145,12 +145,12 @@ def test_full_flow(admin, teacher):
     assert chk["blocking"] and len(chk["pending"]) == 1 and chk["missing"]
     assert teacher.post(f"/api/classes/{cid}/submit").status_code == 400
 
-    # 体育部改档：赵四实际随 2025 级（降级），写入异动记录后按大一大二计算
+    # 体育部改档：赵四实际按 2024 级（大三）算，写入异动记录后按大三大四计算
     pend = admin.get(f"/api/admin/semesters/{sid}/pending").json()
     assert [s["student_no"] for s in pend["students"]] == ["2025200005"]
     r = admin.post(f"/api/admin/semesters/{sid}/students/2024200004/standard",
-                   json={"cohort": 2025, "change_type": "降级", "note": "教务处学籍异动名单"})
-    assert r.status_code == 200 and r.json()["standard"]["band"] == "12" and r.json()["standard"]["source"] == "异动记录"
+                   json={"cohort": 2024, "change_type": "体育部确认", "note": "教务处学籍异动名单"})
+    assert r.status_code == 200 and r.json()["standard"]["band"] == "34" and r.json()["standard"]["source"] == "异动记录"
     # 补上钱五的学生基础数据后，重新导入即解除待确认
     _, _, res = do_import(admin, "base", xlsx(BASE + [["2025200005", "钱五", "女", "经济学院", None, "2025", "人大", None]]), sid)
     assert admin.get(f"/api/admin/semesters/{sid}/pending").json()["students"] == []
