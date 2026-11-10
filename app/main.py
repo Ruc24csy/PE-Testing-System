@@ -757,6 +757,201 @@ def set_standard(sid: int, no: str, request: Request, body: dict = Body(...), u:
     return {"ok": True, "standard": _snap_dict(new)}
 
 
+# ---------------------------------------------------------------- 管理端：学生信息与选课的手动维护
+
+STUDENT_FIELDS = ("name", "college", "major", "class_name", "grade")
+ENROLL_FIELDS = ("name", "class_label", "major", "grade_field", "college", "campus")
+
+
+def _student_dict(st: Student | None) -> dict | None:
+    if not st:
+        return None
+    return {"student_no": st.student_no, "name": st.name, "gender": st.gender, "college": st.college,
+            "major": st.major, "class_name": st.class_name, "grade": st.grade, "manual": st.manual}
+
+
+def _enroll_dict(e: Enrollment, c: TeachingClass) -> dict:
+    return {"enrollment_id": e.id, "active": e.active, "manual": e.manual, "class_id": c.id, "class_no": c.class_no,
+            "class_name": c.class_name, "course_name": c.course_name, "teacher": c.teacher_name,
+            "class_status": c.status, **{f: getattr(e, f) for f in ENROLL_FIELDS}, "info_error": e.info_error}
+
+
+def _refresh_student(db: Session, sem: Semester, no: str, operator: str):
+    grading.rebuild_snapshots(db, sem, operator, only={no})
+    services.recompute_students(db, sem, {no})
+
+
+@app.get("/api/admin/semesters/{sid}/students")
+def search_students(sid: int, q: str = "", u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    q = q.strip()
+    if len(q) < 2:
+        return {"students": []}
+    like = f"%{q}%"
+    nos = set(db.scalars(select(Enrollment.student_no).where(
+        Enrollment.semester_id == sid, (Enrollment.student_no.like(like)) | (Enrollment.name.like(like))).limit(50)))
+    nos |= set(db.scalars(select(Student.student_no).where(
+        (Student.student_no.like(like)) | (Student.name.like(like))).limit(50)))
+    out = []
+    for no in sorted(nos)[:50]:
+        st = db.get(Student, no)
+        es = db.execute(select(Enrollment, TeachingClass).join(TeachingClass, TeachingClass.id == Enrollment.class_id)
+                        .where(Enrollment.semester_id == sid, Enrollment.student_no == no)).all()
+        out.append({"student_no": no, "name": (st.name if st else "") or (es[0][0].name if es else ""),
+                    "gender": {"M": "男", "F": "女"}.get(st.gender if st else None, "待确认"),
+                    "classes": [c.class_name for e, c in es if e.active]})
+    return {"students": out}
+
+
+@app.get("/api/admin/semesters/{sid}/student/{no}")
+def student_detail(sid: int, no: str, u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    _sem(db, sid)
+    es = db.execute(select(Enrollment, TeachingClass).join(TeachingClass, TeachingClass.id == Enrollment.class_id)
+                    .where(Enrollment.semester_id == sid, Enrollment.student_no == no)
+                    .order_by(Enrollment.active.desc(), TeachingClass.course_name)).all()
+    snap = db.scalar(select(StandardSnapshot).where(StandardSnapshot.semester_id == sid,
+                                                    StandardSnapshot.student_no == no))
+    classes = [{"id": c.id, "label": f"{c.course_name} · {c.class_name}（{c.teacher_name or '教师待补'}）{c.class_no}"}
+               for c in db.scalars(select(TeachingClass).where(TeachingClass.semester_id == sid)
+                                   .order_by(TeachingClass.course_name, TeachingClass.class_name))]
+    return {"student_no": no, "student": _student_dict(db.get(Student, no)), "standard": _snap_dict(snap),
+            "enrollments": [_enroll_dict(e, c) for e, c in es], "classes": classes}
+
+
+@app.put("/api/admin/semesters/{sid}/student/{no}")
+def save_student(sid: int, no: str, request: Request, body: dict = Body(...), u: User = Depends(admin_user),
+                 db: Session = Depends(get_db)):
+    """补录或修改学生基础信息（性别、姓名、学院等）。保存后重新判定标准档并重算成绩。"""
+    sem = _sem(db, sid)
+    if not re.fullmatch(r"[0-9A-Za-z]{4,16}", no):
+        raise HTTPException(400, "学号格式不正确")
+    gender = {"男": "M", "女": "F", "M": "M", "F": "F"}.get(str(body.get("gender", "")).strip())
+    if not gender:
+        raise HTTPException(400, "请选择性别")
+    st = db.get(Student, no)
+    old = _student_dict(st)
+    if st is None:
+        st = Student(student_no=no)
+        db.add(st)
+    st.gender = gender
+    for f in STUDENT_FIELDS:
+        if f in body:
+            setattr(st, f, str(body[f] or "").strip()[:128])
+    st.manual = True
+    db.flush()
+    _refresh_student(db, sem, no, u.staff_no)
+    services.log(db, u.staff_no, "修改学生信息", no, sid, ip=client_ip(request), old=old, new=_student_dict(st))
+    db.commit()
+    return student_detail(sid, no, u, db)
+
+
+def _enrollment_for_admin(db: Session, eid: int) -> tuple[Enrollment, TeachingClass, Semester]:
+    e = db.get(Enrollment, eid)
+    if not e:
+        raise HTTPException(404, "选课记录不存在")
+    c = db.get(TeachingClass, e.class_id)
+    return e, c, c.semester
+
+
+@app.patch("/api/admin/enrollments/{eid}")
+def update_enrollment(eid: int, request: Request, body: dict = Body(...), u: User = Depends(admin_user),
+                      db: Session = Depends(get_db)):
+    """修改一条选课记录：上课班级、专业、上课年级、院系、校区，或调到本学期另一个教学班。已有成绩跟着走。"""
+    e, c, sem = _enrollment_for_admin(db, eid)
+    old = _enroll_dict(e, c)
+    target = c
+    if body.get("class_id") and int(body["class_id"]) != c.id:
+        target = db.get(TeachingClass, int(body["class_id"]))
+        if not target or target.semester_id != sem.id:
+            raise HTTPException(400, "目标教学班不在本学期")
+        dup = db.scalar(select(Enrollment).where(Enrollment.class_id == target.id, Enrollment.student_no == e.student_no))
+        if dup and dup.active:
+            raise HTTPException(400, f"该生已在 {target.class_name} 里")
+        if dup:  # 以前从目标班移除过：删掉那条空记录（有成绩的不删）
+            if db.scalar(select(ScoreRecord).where(ScoreRecord.enrollment_id == dup.id)):
+                raise HTTPException(400, f"该生在 {target.class_name} 留有以前的成绩记录，请先联系开发人员处理")
+            db.delete(dup)
+            db.flush()
+        # 原班留一条停用记录，防止重新导入时又被加回原班；成绩随人转到新班
+        ghost = Enrollment(semester_id=sem.id, class_id=c.id, student_no=e.student_no, name=e.name,
+                           class_label=e.class_label, major=e.major, grade_field=e.grade_field, college=e.college,
+                           campus=e.campus, course_category=e.course_category, active=False, manual=True, seq=e.seq)
+        e.class_id = target.id
+        e.seq = (db.scalar(select(func.max(Enrollment.seq)).where(Enrollment.class_id == target.id)) or 0) + 1
+        db.flush()
+        db.add(ghost)
+    for f in ENROLL_FIELDS:
+        if f in body:
+            setattr(e, f, str(body[f] or "").strip()[:128])
+    e.active, e.manual, e.info_error = True, True, None
+    db.flush()
+    _refresh_student(db, sem, e.student_no, u.staff_no)
+    if target.id != c.id:
+        services.recompute_class(db, target, sem)
+    services.log(db, u.staff_no, "修改选课", f"{e.student_no} {e.name}", sem.id, ip=client_ip(request),
+                 old=old, new=_enroll_dict(e, target))
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/admin/enrollments/{eid}")
+def remove_enrollment(eid: int, request: Request, u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    """把学生移出教学班（停用，不删除；已有成绩保留，可在原班恢复）。"""
+    e, c, sem = _enrollment_for_admin(db, eid)
+    e.active, e.manual = False, True
+    db.flush()
+    _refresh_student(db, sem, e.student_no, u.staff_no)
+    services.log(db, u.staff_no, "移出教学班", f"{e.student_no} {e.name}", sem.id, ip=client_ip(request),
+                 class_no=c.class_no, class_name=c.class_name)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/admin/enrollments/{eid}/restore")
+def restore_enrollment(eid: int, u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    e, c, sem = _enrollment_for_admin(db, eid)
+    e.active, e.manual = True, True
+    db.flush()
+    _refresh_student(db, sem, e.student_no, u.staff_no)
+    services.log(db, u.staff_no, "恢复选课", f"{e.student_no} {e.name}", sem.id, class_no=c.class_no)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/admin/semesters/{sid}/enrollments")
+def add_enrollment(sid: int, request: Request, body: dict = Body(...), u: User = Depends(admin_user),
+                   db: Session = Depends(get_db)):
+    """把学生加进本学期某个教学班。"""
+    sem = _sem(db, sid)
+    no = str(body.get("student_no", "")).strip()
+    if not re.fullmatch(r"[0-9A-Za-z]{4,16}", no):
+        raise HTTPException(400, "学号格式不正确")
+    c = db.get(TeachingClass, int(body.get("class_id") or 0))
+    if not c or c.semester_id != sid:
+        raise HTTPException(400, "请选择本学期的教学班")
+    e = db.scalar(select(Enrollment).where(Enrollment.class_id == c.id, Enrollment.student_no == no))
+    if e and e.active:
+        raise HTTPException(400, f"该生已在 {c.class_name} 里")
+    st = db.get(Student, no)
+    if e is None:
+        e = Enrollment(semester_id=sid, class_id=c.id, student_no=no,
+                       seq=(db.scalar(select(func.max(Enrollment.seq)).where(Enrollment.class_id == c.id)) or 0) + 1)
+        db.add(e)
+    e.name = str(body.get("name") or (st.name if st else "")).strip()[:64]
+    for f in ("class_label", "major", "grade_field", "college", "campus"):
+        setattr(e, f, str(body.get(f) or "").strip()[:128])
+    if not e.college and st:
+        e.college = st.college
+    if not e.campus:
+        e.campus = c.campus
+    e.active, e.manual = True, True
+    db.flush()
+    _refresh_student(db, sem, no, u.staff_no)
+    services.log(db, u.staff_no, "加入教学班", f"{no} {e.name}", sid, ip=client_ip(request),
+                 class_no=c.class_no, class_name=c.class_name)
+    db.commit()
+    return {"ok": True, "enrollment_id": e.id}
+
+
 @app.post("/api/admin/semesters/{sid}/students/{no}/keep")
 def keep_enrollment(sid: int, no: str, enrollment_id: int = Body(..., embed=True), u: User = Depends(admin_user),
                     db: Session = Depends(get_db)):
