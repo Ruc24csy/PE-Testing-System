@@ -15,10 +15,20 @@ def _secret() -> str:
     if v:
         return v
     f = DATA_DIR / ".secret_key"
-    if not f.exists():
-        f.write_text(secrets.token_urlsafe(48))
-        f.chmod(0o600)
-    return f.read_text().strip()
+    # 多个服务进程同时启动时只允许一个生成密钥，其余读同一份，否则各进程的登录状态互不认
+    try:
+        fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(secrets.token_urlsafe(48))
+    except FileExistsError:
+        pass
+    for _ in range(50):
+        key = f.read_text().strip()
+        if key:
+            return key
+        import time
+        time.sleep(0.05)
+    raise RuntimeError("会话密钥文件为空")
 
 
 SECRET_KEY = _secret()

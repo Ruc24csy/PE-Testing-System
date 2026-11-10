@@ -232,8 +232,13 @@ SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 
 def init_db():
-    Base.metadata.create_all(engine)
-    _add_missing_columns()
+    # 多个服务进程同时启动时串行建表、补列
+    import fcntl
+    from .config import DATA_DIR
+    with open(DATA_DIR / ".init.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        Base.metadata.create_all(engine)
+        _add_missing_columns()
 
 
 def _add_missing_columns():
