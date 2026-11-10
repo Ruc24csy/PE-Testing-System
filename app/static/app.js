@@ -139,11 +139,11 @@ async function viewHome(scope) {
   let body;
   if (!d.imported) body = `<div class="notice">${esc(sem.name)}的课程信息尚未导入，请联系体育部。</div>`;
   else if (!d.classes.length && !filt.course && !filt.campus) body = `<div class="notice">${all ? "本学期没有教学班。" : `本学期没有找到您（工号 ${esc(state.me.staff_no)}）的教学班，请联系体育部核对课程安排信息。`}</div>`;
-  else body = `<table class="list"><thead><tr><th>课程名称</th><th>教学班名称</th><th>上课时间</th><th>上课地点</th><th>校区</th><th>选课人数</th>${all ? "<th>授课教师</th>" : ""}<th>录入进度</th><th>状态</th></tr></thead><tbody>
+  else body = `<table class="list"><thead><tr><th>课程名称</th><th>教学班名称</th><th>上课时间</th><th>上课地点</th><th>校区</th><th>选课人数</th>${all ? "<th>授课教师</th>" : ""}<th>录入进度</th><th title="总评四舍五入后≥90分（即≥89.5分）的人数 ÷ 班级人数">优秀率</th><th>状态</th></tr></thead><tbody>
     ${d.classes.map((c) => `<tr class="clickable" data-id="${c.id}"><td>${esc(c.course_name)}</td><td><a href="#/class/${c.id}">${esc(c.class_name)}</a>${c.pending ? ` <span class="tag warn" title="有学生的年级或性别待体育部确认">待确认 ${c.pending}</span>` : ""}</td>
       <td>${esc(c.weekday)} ${esc(fmtPeriods(c.periods))}<div class="muted small">${esc(c.weeks)}</div></td><td>${esc(c.location)}</td><td>${esc(c.campus)}</td><td>${c.roster}</td>
       ${all ? `<td>${esc(c.teacher_name)}${c.teacher_pending ? ' <span class="tag err">教师待补</span>' : ""}</td>` : ""}
-      <td>${c.entered}/${c.roster}</td><td><span class="tag s-${c.status}">${c.status}</span></td></tr>`).join("")}</tbody></table>`;
+      <td>${c.entered}/${c.roster}</td><td>${excellentCell(c.excellent, c.roster)}</td><td><span class="tag s-${c.status}">${c.status}</span></td></tr>`).join("")}</tbody></table>`;
   $("#app").innerHTML = `<div class="card"><div class="row"><h2 style="margin:0">${esc(sem.name)} ${sem.is_current ? '<span class="tag cur">本学期</span>' : ""}</h2>
     <span class="spacer"></span>
     <select id="fCourse"><option value="">全部课程</option>${d.courses.map((c) => `<option ${c === filt.course ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
@@ -154,6 +154,23 @@ async function viewHome(scope) {
   const save = () => { sessionStorage.setItem("classFilter", JSON.stringify({ course: $("#fCourse").value, campus: $("#fCampus").value, scope: $("#fAll") && $("#fAll").checked ? "all" : "mine" })); viewHome(); };
   $("#fCourse").onchange = save; $("#fCampus").onchange = save; if ($("#fAll")) $("#fAll").onchange = save;
   $$("tr.clickable").forEach((tr) => (tr.onclick = (e) => { if (e.target.tagName !== "A") location.hash = `#/class/${tr.dataset.id}`; }));
+}
+const EXCELLENT_LINE = 89.5;   // 总评四舍五入后≥90分即为优秀
+const EXCELLENT_WARN = 0.3;    // 优秀率超过30%标红提醒
+function excellentCell(n, total) {
+  if (!total) return "—";
+  const r = n / total;
+  return `<span style="${r > EXCELLENT_WARN ? "color:var(--err);font-weight:600" : ""}">${(r * 100).toFixed(1)}%</span><div class="muted small">${n}/${total}</div>`;
+}
+function updateExcellence(C) {
+  const el = $("#exRate"); if (!el) return;
+  const n = C.rows.length;
+  const ex = C.rows.filter((r) => r.total !== null && r.total >= EXCELLENT_LINE).length;
+  const done = C.rows.filter((r) => r.complete).length;
+  const rate = n ? ex / n : 0;
+  const over = rate > EXCELLENT_WARN;
+  el.className = "notice " + (over ? "err" : "info");
+  el.innerHTML = `<b>优秀率 ${(rate * 100).toFixed(1)}%</b>　优秀（总评≥89.5分）${ex} 人 / 全班 ${n} 人，已录完 ${done} 人${over ? "　<b>已超过30%，请注意控制优秀比例</b>" : ""}`;
 }
 function fmtPeriods(p) { const m = String(p || "").match(/\d{2}/g); return m ? `第${m.map(Number).join("-")}节` : p || ""; }
 
@@ -198,6 +215,7 @@ function renderClass(C) {
       <div><span>权重</span>${esc(itemName("a"))} ${wt("a")}%、${esc(itemName("b"))} ${wt("b")}%、技能 ${(cfg.skill_weight * 100).toFixed(0)}%、平时 ${(cfg.regular_weight * 100).toFixed(0)}% ${d.editable ? '<button class="link" id="cfgBtn">修改</button>' : ""}</div>
     </div>
     ${!d.editable ? `<div class="notice info" style="margin-top:10px">${esc(d.readonly_reason)}${d.unlock_request && d.unlock_request.status === "待审核" ? "（撤回申请审核中）" : ""}</div>` : ""}
+    <div id="exRate" class="notice info" style="margin-top:10px"></div>
     ${pendingN ? `<div class="notice" style="margin-top:10px">本班有 ${pendingN} 名学生的年级或性别待体育部确认（黄色行），确认前按暂定标准档计算，班级不能提交。</div>` : ""}
     <div class="toolbar">
       <label><input type="checkbox" id="fMissing"> 仅显示未录入</label>
@@ -238,6 +256,7 @@ function rowVisible(C, r) {
 }
 function renderRows(C) {
   const tb = $("#grid tbody");
+  updateExcellence(C);
   tb.innerHTML = C.rows.filter((r) => rowVisible(C, r)).map((r) => rowHtml(C, r)).join("") || `<tr><td colspan="24" class="muted" style="padding:20px">没有符合条件的学生</td></tr>`;
   updateSelInfo(C);
 }
@@ -325,6 +344,7 @@ async function flushQueue(C) {
   } finally { C._busy = false; if (C.queue.size) setTimeout(() => flushQueue(C), 1500); }
 }
 function refreshRows(C, ids) {
+  updateExcellence(C);
   const active = document.activeElement; const af = active && active.dataset ? [active.dataset.e, active.dataset.f] : null;
   for (const id of ids) {
     const tr = $(`#grid tr[data-e="${id}"]`); if (!tr) continue;
