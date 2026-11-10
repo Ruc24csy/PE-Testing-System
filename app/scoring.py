@@ -226,7 +226,9 @@ def compute_row(*, gender: str | None, band: str | None, config: dict, values: d
     """
     out = {"slots": {}, "subtotal": None, "total": None, "issues": [], "complete": True}
     sub = Decimal("0")
-    sub_any = False
+    # 体测小计只在参与它的每一项都“定了”时才出数：填了成绩，或标了免测／缺考／作弊／违纪等特殊情况。
+    # 有一项还空着、或标了缓测（按缺项处理），整个小计就不算，避免只加已填的那几项得出偏小的数。
+    sub_ready = True
     for slot in config["slots"]:
         k = slot["key"]
         item = slot["items"].get(gender) if gender else None
@@ -239,13 +241,15 @@ def compute_row(*, gender: str | None, band: str | None, config: dict, values: d
         elif status == "缓测":
             info["display"] = "缓测（缺项）"
             out["complete"] = False
+            sub_ready = False
         elif status in ZERO_STATUSES:
             info["score"], info["folded"], info["display"] = 0.0, 0.0, status
-            sub_any = True
         elif raw is None:
             out["complete"] = False
+            sub_ready = False
         elif not gender or not band:
             out["complete"] = False
+            sub_ready = False
             info["hint"] = "性别或标准档待确认，暂不换算"
         else:
             r = item_score(item, gender, band, raw, version)
@@ -254,17 +258,17 @@ def compute_row(*, gender: str | None, band: str | None, config: dict, values: d
             info["folded"] = d2(r["total"] * slot["weight"])
             info["hint"] = describe(r)
             sub += Decimal(str(info["folded"]))
-            sub_any = True
             if r["below_min"]:
                 out["issues"].append(f"{slot.get('label', k)}低于最低档")
         out["slots"][k] = info
-    if sub_any:
+    if sub_ready and config["slots"]:
         out["subtotal"] = d2(float(sub))
     skill, regular = values.get("skill"), values.get("regular")
     if skill is None or regular is None:
         out["complete"] = False
-    if out["subtotal"] is not None or skill is not None or regular is not None:
-        out["total"] = d1((out["subtotal"] or 0) + (skill or 0) + (regular or 0))
+    # 总成绩同样要四项都齐（体测小计＋运动技能＋平时成绩）才出数
+    if sub_ready and config["slots"] and skill is not None and regular is not None:
+        out["total"] = d1((out["subtotal"] or 0) + skill + regular)
     return out
 
 

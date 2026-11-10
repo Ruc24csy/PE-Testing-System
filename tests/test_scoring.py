@@ -90,6 +90,37 @@ def test_empty_is_not_zero():
     assert out["subtotal"] is None and out["total"] is None and not out["complete"]
 
 
+def test_partial_subtotal_is_not_summed():
+    """参与体测小计的项目还有一格空着时，小计与总成绩都不出数，不按已填的部分先加。"""
+    cfg = s.default_config("fall")
+    out = s.compute_row(gender="M", band="12", config=cfg,
+                        values={"a_raw": 170, "skill": 55.5, "regular": 9})
+    assert out["subtotal"] is None and out["total"] is None and not out["complete"]
+    out = s.compute_row(gender="M", band="12", config=cfg,
+                        values={"a_raw": 170, "b_raw": 273, "skill": 55.5, "regular": 9})
+    assert out["subtotal"] == 31.4 and out["total"] == 95.9
+
+
+def test_special_status_counts_as_decided():
+    """免测、缺考等特殊情况算“已定”，不挡小计；缓测按缺项处理，挡小计。"""
+    cfg = s.default_config("fall")
+    out = s.compute_row(gender="F", band="34", config=cfg,
+                        values={"a_status": "缺考", "b_status": "免测", "skill": 50, "regular": 8})
+    assert out["subtotal"] == 0.0 and out["total"] == 58.0
+    out = s.compute_row(gender="F", band="34", config=cfg,
+                        values={"a_status": "缓测", "b_status": "免测", "skill": 50, "regular": 8})
+    assert out["subtotal"] is None and out["total"] is None
+
+
+def test_total_needs_skill_and_regular():
+    """体测小计有了，但运动技能或平时成绩缺一项，总成绩仍不出数。"""
+    cfg = s.default_config("fall")
+    out = s.compute_row(gender="M", band="12", config=cfg, values={"a_raw": 170, "b_raw": 273, "skill": 55.5})
+    assert out["subtotal"] == 31.4 and out["total"] is None and not out["complete"]
+    out = s.compute_row(gender="M", band="12", config=cfg, values={"a_raw": 170, "b_raw": 273, "regular": 9})
+    assert out["subtotal"] == 31.4 and out["total"] is None
+
+
 def test_no_gender_no_conversion():
     out = s.compute_row(gender=None, band="12", config=s.default_config("fall"), values={"a_raw": 200})
     assert out["slots"]["a"]["score"] is None

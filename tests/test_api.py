@@ -328,7 +328,17 @@ def test_preview_does_not_save(admin):
         {"enrollment_id": r["enrollment_id"], "field": "regular", "value": "7.5"},
         {"enrollment_id": r["enrollment_id"], "field": "skill", "value": "99"}]}).json()
     pr = res["rows"][0]
-    assert pr["values"]["regular"] == 7.5 and pr["total"] is not None
+    assert pr["values"]["regular"] == 7.5
+    # 体测两项还有一格空着，按新口径小计与总成绩都不出数
+    assert pr["subtotal"] is None and pr["total"] is None
     assert res["errors"][0]["field"] == "skill"
+    # 四项都齐了才出小计与总成绩
+    res = admin.post(f"/api/classes/{cid}/preview", json={"changes": [
+        {"enrollment_id": r["enrollment_id"], "field": "a_raw", "value": "3分40秒"},
+        {"enrollment_id": r["enrollment_id"], "field": "b_raw", "value": "180"},
+        {"enrollment_id": r["enrollment_id"], "field": "skill", "value": "55"},
+        {"enrollment_id": r["enrollment_id"], "field": "regular", "value": "7.5"}]}).json()
+    pr = res["rows"][0]
+    assert pr["subtotal"] is not None and pr["total"] is not None
     again = next(x for x in admin.get(f"/api/classes/{cid}").json()["rows"] if x["student_no"] == "2025200002")
     assert again["values"]["regular"] == before  # 没有写库
