@@ -529,6 +529,7 @@ async function adOverview(el) {
    ${!o.classes ? `<div class="notice">本学期课程信息尚未导入。请到“课程信息导入”依次导入学生基础数据表、课程安排表、学生选课表。</div>` : ""}
    <div class="kv"><div>教学班</div><div>${o.classes}（未开始 ${o.status["未开始"] || 0}／录入中 ${o.status["录入中"] || 0}／已提交 ${o.status["已提交"] || 0}）</div>
    <div>有效选课记录</div><div>${o.enrollments}</div><div>待确认学生</div><div>${o.pending} <a href="#/admin/pending">去处理</a></div>
+   <div>教师标记信息有误</div><div>${o.info_errors ? `<b style="color:var(--err)">${o.info_errors}</b> <a href="#/admin/pending">去处理</a>` : 0}</div>
    <div>教师待补</div><div>${o.teacher_pending}</div><div>待审核撤回申请</div><div>${o.unlock_waiting} <a href="#/admin/unlock">去审核</a></div></div>
    <div class="row" style="margin-top:14px"><button class="primary" id="expAll">导出本学期全部成绩</button><a class="btn" href="#/">查看全部教学班</a></div>`;
   $("#expAll").onclick = () => download(`/api/admin/semesters/${sem.id}/export`);
@@ -601,14 +602,15 @@ function impMapping(info, sem) {
 async function adPending(el) {
   const sem = curSem(); if (!sem) return;
   const d = await api(`/api/admin/semesters/${sem.id}/pending`);
-  el.innerHTML = `<p>${esc(sem.name)} 共 <b>${d.students.length}</b> 名学生待确认：${Object.entries(d.summary).map(([k, v]) => `${esc(k)} ${v}`).join("，") || "无"}</p>
+  el.innerHTML = `<div class="${d.info_errors.length ? "notice err" : "notice info"}" style="margin-bottom:16px">
+    <h3 style="margin-top:0">教师标记“信息有误”${d.info_errors.length ? `：<b>${d.info_errors.length}</b> 条待处理` : "：暂无"}</h3>
+    ${d.info_errors.length ? `<table class="list"><tr><th>学号</th><th>姓名</th><th>教学班</th><th>教师</th><th>说明</th><th></th></tr>${d.info_errors.map((x) => `<tr><td>${esc(x.student_no)}</td><td>${esc(x.name)}</td><td>${esc(x.class_name)}</td><td>${esc(x.teacher)}</td><td>${esc(x.note)}</td><td><button class="link" data-edit2="${esc(x.student_no)}">去修改</button></td></tr>`).join("")}</table>` : `<p class="muted small" style="margin:0">教师在录入页标记的学生信息问题会出现在这里。</p>`}</div>
+    <p>${esc(sem.name)} 共 <b>${d.students.length}</b> 名学生待确认：${Object.entries(d.summary).map(([k, v]) => `${esc(k)} ${v}`).join("，") || "无"}</p>
     <div class="row"><input type="text" id="pSearch" placeholder="按学号、姓名或原因筛选" size="30"></div>
     <table class="list" style="margin-top:10px"><thead><tr><th>学号</th><th>姓名</th><th>性别</th><th>暂定标准档</th><th>原因</th><th>选课记录</th><th>操作</th></tr></thead><tbody id="pBody"></tbody></table>
     <h3>教师待补的教学班（${d.teacher_pending.length}）</h3>
     ${d.teacher_pending.length ? `<table class="list"><tr><th>教学班</th><th>当前教师</th><th>指定责任教师</th></tr>${d.teacher_pending.map((c) => `<tr><td>${esc(c.class_name)}（${esc(c.class_no)}）</td><td>${esc(c.teacher_name || "—")}</td>
-      <td><input type="text" placeholder="工号" size="10" data-tno="${c.id}"> <input type="text" placeholder="姓名" size="8" data-tname="${c.id}"> <button data-tset="${c.id}">指定</button></td></tr>`).join("")}</table>` : "<p class='muted'>无</p>"}
-    <h3>教师标记“信息有误”（${d.info_errors.length}）</h3>
-    ${d.info_errors.length ? `<table class="list"><tr><th>学号</th><th>姓名</th><th>教学班</th><th>教师</th><th>说明</th><th></th></tr>${d.info_errors.map((x) => `<tr><td>${esc(x.student_no)}</td><td>${esc(x.name)}</td><td>${esc(x.class_name)}</td><td>${esc(x.teacher)}</td><td>${esc(x.note)}</td><td><button class="link" data-edit2="${esc(x.student_no)}">去修改</button></td></tr>`).join("")}</table>` : "<p class='muted'>无</p>"}`;
+      <td><input type="text" placeholder="工号" size="10" data-tno="${c.id}"> <input type="text" placeholder="姓名" size="8" data-tname="${c.id}"> <button data-tset="${c.id}">指定</button></td></tr>`).join("")}</table>` : "<p class='muted'>无</p>"}`;
   const draw = () => {
     const q = $("#pSearch").value.trim();
     $("#pBody").innerHTML = d.students.filter((s) => !q || (s.student_no + s.name + s.reasons.join("")).includes(q)).map((s) => `<tr>
