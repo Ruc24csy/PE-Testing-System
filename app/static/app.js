@@ -186,12 +186,11 @@ function segSpec(C, item, field) {
   if (field === "skill" || field === "regular") {
     const max = Math.round((field === "skill" ? C.d.config.skill_weight : C.d.config.regular_weight) * 100);
     const n = String(max).length;
-    // 再补一位就超过满分时视为填满：60 分制下打 7 直接跳，打 5 等下一位
-    return { segs: [{ n, max: n + 2, dec: true, after: `/${max}`, full: (v) => /^\d+$/.test(v) && (v.length >= n || v === "0" || Number(v) * 10 > max) }],
+    return { segs: [{ n, max: n + 2, dec: true, after: `/${max}`, full: () => false }],
       join: (a) => a[0], split: (t) => [String(t ?? "")] };
   }
   if (item === "run1000" || item === "run800") {
-    return { segs: [{ n: 1, after: "'" }, { n: 2, after: "\"", dec: true, max: 4, full: (v) => /^\d{2}$/.test(v) }],
+    return { segs: [{ n: 1, after: "'" }, { n: 2, after: "\"", dec: true, max: 4, full: () => false }],
       join: (a) => (a[0] === "" && a[1] === "" ? "" : `${a[0] || 0}'${(a[1] || "0").padStart(2, "0")}"`),
       split: (t) => {
         const s = String(t ?? "").trim(); if (!s) return ["", ""];
@@ -201,12 +200,12 @@ function segSpec(C, item, field) {
       } };
   }
   if (item === "run50") {
-    return { segs: [{ n: 2, after: ".", full: (v) => /^\d+$/.test(v) && (v.length >= 2 || Number(v) >= 2) }, { n: 1, after: "s" }],
+    return { segs: [{ n: 2, after: ".", full: () => false }, { n: 1, after: "s", full: () => false }],
       join: (a) => (a[0] === "" && a[1] === "" ? "" : a[1] === "" ? a[0] : `${a[0] || 0}.${a[1]}`),
       split: (t) => { const s = String(t ?? "").replace(/[秒sS"]/g, "").trim(); if (!s) return ["", ""]; const m = s.match(/^(\d+)(?:\.(\d))?/); return m ? [m[1], m[2] || ""] : [s, ""]; } };
   }
   const simple = { long_jump: [3, "cm"], pull_up: [2, "个"], sit_up: [2, "个"], vital_capacity: [4, "ml"], sit_reach: [5, "cm", true] }[item] || [8, ""];
-  return { segs: [{ n: simple[0], after: simple[1], dec: !!simple[2], neg: !!simple[2], full: simple[2] ? () => false : null }],
+  return { segs: [{ n: simple[0], after: simple[1], dec: !!simple[2], neg: !!simple[2], full: () => false }],
     join: (a) => a[0], split: (t) => [String(t ?? "").replace(/(cm|厘米|个|次|ml|毫升)$/i, "").trim()] };
 }
 function segFull(sp, i, v) { const s = sp.segs[i]; return s.full ? s.full(v) : v.length >= s.n; }
@@ -268,7 +267,7 @@ function renderClass(C) {
       ${d.editable ? `<button id="saveBtn" title="平时会自动保存，这里可以立即保存一次">保存</button><button class="primary" id="submitBtn" title="提交后成绩锁定，交给体育部">提交成绩</button>` : ""}
       ${c.status === "已提交" && (!d.unlock_request || d.unlock_request.status !== "待审核") ? `<button id="unlockBtn">申请撤回</button>` : ""}
     </div>
-    <div class="muted small">按顺序填数字，一格填满自动跳到下一格，Enter 换下一位学生。修改会自动保存，确认无误后再点“提交成绩”。免测、缺考等特殊情况点每行的“更多”。</div>
+    <div class="muted small">填完一格按回车，先到右边一格，一行填完再到下一位学生；↑↓ 上下换格。耐力跑填完“分”会自动跳到“秒”。修改会自动保存，确认无误后再点“提交成绩”。免测、缺考等特殊情况点每行的“更多”。</div>
   </div>
   <div class="grid-wrap"><table class="grid ${showOpt ? "" : "compact"}" id="grid">
     <thead><tr>
@@ -420,6 +419,13 @@ function moveFocus(seg, dRow) {
   const segs = $$(`#grid .seg[data-f="${seg.dataset.f}"]`);
   for (let i = segs.indexOf(seg) + dRow; i >= 0 && i < segs.length; i += dRow) if (focusSeg(segs[i])) return;
 }
+// 回车顺序：体测两项一组、技能和平时一组，先向右，一行填完再到下一行
+const ENTER_GROUPS = [["a_raw", "b_raw"], ["skill", "regular"]];
+function nextInRow(seg, d) {
+  const g = ENTER_GROUPS.find((x) => x.includes(seg.dataset.f)) || [seg.dataset.f];
+  const segs = $$("#grid .seg").filter((s) => g.includes(s.dataset.f));
+  for (let i = segs.indexOf(seg) + d; i >= 0 && i < segs.length; i += d) if (focusSeg(segs[i])) return;
+}
 function updateSelInfo(C) { const el = $("#selInfo"); if (el) el.textContent = C.sel.size ? `已勾选 ${C.sel.size} 人` : ""; }
 function commitSeg(C, seg) {
   if (!seg || !C.d.editable || !$("input.sg", seg) || $("input.sg", seg).readOnly) return;
@@ -453,14 +459,13 @@ function bindClass(C) {
     const ins = $$("input.sg", seg);
     if (sep || segFull(sp, i, t.value)) {
       if (i < ins.length - 1) { ins[i + 1].focus(); ins[i + 1].select(); }
-      else if (!sep) moveFocus(seg, 1);
     }
   });
   grid.addEventListener("keydown", (e) => {
     const t = e.target; const seg = segOf(t); if (!seg || !t.classList.contains("sg")) return;
     const ins = $$("input.sg", seg); const i = Number(t.dataset.i);
     const atStart = t.selectionStart === 0 && t.selectionEnd === 0; const atEnd = t.selectionStart === t.value.length;
-    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); commitSeg(C, seg); moveFocus(seg, e.shiftKey ? -1 : 1); }
+    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); commitSeg(C, seg); nextInRow(seg, e.shiftKey ? -1 : 1); }
     else if (e.key === "ArrowDown") { e.preventDefault(); moveFocus(seg, 1); }
     else if (e.key === "ArrowUp") { e.preventDefault(); moveFocus(seg, -1); }
     else if (e.key === "ArrowLeft" && atStart && i > 0) { e.preventDefault(); ins[i - 1].focus(); ins[i - 1].select(); }
