@@ -9,11 +9,15 @@
 #
 # 下载全部走国内镜像：uv 和 Python 依赖用清华 PyPI 镜像，Python 本体用南京大学镜像
 # （清华没有 Python 预编译包的镜像）。要换别的镜像，执行前设环境变量 PYPI_MIRROR / PYTHON_MIRROR。
-# 系统软件（Nginx 等）用服务器自带的 UOS 软件源。
+# Nginx 用南京大学镜像上的 Nginx 官方稳定版（UOS 自带源里的 1.14.1 漏洞太多），
+# 其余系统软件用服务器自带的 UOS 软件源。
 set -euo pipefail
 
 PYPI_MIRROR="${PYPI_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple}"
 PYTHON_MIRROR="${PYTHON_MIRROR:-https://mirror.nju.edu.cn/github-release/astral-sh/python-build-standalone}"
+NGINX_MIRROR="${NGINX_MIRROR:-https://mirror.nju.edu.cn/nginx}"
+# 低于这个版本的 Nginx 会被漏洞扫描按版本号报出一串 CVE
+NGINX_MIN_VERSION=1.30.0
 # 版本固定，和 deploy/VERSIONS.md 一致；升级时一起改
 UV_VERSION=0.13.7
 PYTHON_VERSION=3.12.16
@@ -37,8 +41,27 @@ step() { echo; echo "==> $*"; }
 step "安装系统依赖"
 if command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
   PM=$(command -v dnf || command -v yum)
+  # uelc20 与 RHEL 8 同类，用官方给 RHEL 8 打的包（UOS 的 $releasever 是 20，不能用变量）
+  cat > /etc/yum.repos.d/nginx.repo <<REPO
+[nginx-stable]
+name=nginx stable repo
+baseurl=$NGINX_MIRROR/rhel/8/\$basearch/
+gpgcheck=1
+enabled=1
+gpgkey=$NGINX_MIRROR/keys/nginx_signing.key
+module_hotfixes=true
+REPO
+  if rpm -q nginx >/dev/null 2>&1 && [[ "$(rpm -q --qf '%{RELEASE}' nginx)" != *ngx* ]]; then
+    # 系统源的旧版 Nginx 带着 nginx-filesystem、nginx-mod-* 等子包，和官方包冲突：备份配置后卸掉
+    cp -a /etc/nginx "/etc/nginx.bak.$(date +%Y%m%d%H%M%S)"
+    "$PM" remove -y 'nginx*'
+  fi
   "$PM" install -y nginx curl ca-certificates rsync unzip tar openssl parted e2fsprogs sudo cronie
   systemctl enable --now crond
+  # 重复执行时把 Nginx 升到官方源里的最新稳定版
+  "$PM" upgrade -y nginx
+  # 官方包自带的欢迎页站点：用 IP 访问 80 端口时会露出来
+  rm -f /etc/nginx/conf.d/default.conf
 elif command -v apt-get >/dev/null 2>&1; then
   apt-get update -y
   apt-get install -y nginx curl ca-certificates rsync unzip openssl parted sudo cron
@@ -113,6 +136,16 @@ systemctl restart pe-scores
 
 step "Nginx"
 sed -e "s#pe.example.edu.cn#$DOMAIN#g" "$APP_DIR/deploy/nginx.conf" > /etc/nginx/conf.d/pe-scores.conf
+NGINX_VERSION=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+version_lt() { [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" == "$1" ]]; }
+if version_lt "$NGINX_VERSION" 1.25.1; then
+  # 旧版不认 "http2 on;"，退回 HTTP/1.1（也避开旧版 HTTP/2 的拒绝服务漏洞）
+  sed -i '/^ *http2 on;/d' /etc/nginx/conf.d/pe-scores.conf
+fi
+if version_lt "$NGINX_VERSION" "$NGINX_MIN_VERSION"; then
+  echo "  警告：Nginx 是 $NGINX_VERSION，低于 $NGINX_MIN_VERSION，漏洞扫描会按版本报出多个 CVE。"
+  echo "        apt 系服务器没有可用的官方源，请找服务器管理员升级 Nginx。"
+fi
 if [[ ! -f "/etc/nginx/certs/$DOMAIN.crt" ]]; then
   echo "  还没有证书 /etc/nginx/certs/$DOMAIN.crt 和 .key，先生成临时自签证书；拿到正式证书后覆盖这两个文件并 systemctl reload nginx"
   mkdir -p /etc/nginx/certs
@@ -128,7 +161,13 @@ fi
 if systemctl is-active -q firewalld 2>/dev/null; then
   # 只放通本机防火墙的 80/443；对公网是否放通仍由学校的 WAF 和边界防火墙决定
   firewall-cmd -q --permanent --add-service=http --add-service=https
+  # 不回应 ICMP 时间戳请求（漏洞扫描的「ICMP 时间戳检测」）
+  for t in timestamp-request timestamp-reply; do
+    firewall-cmd -q --permanent --query-icmp-block=$t || firewall-cmd -q --permanent --add-icmp-block=$t
+  done
   firewall-cmd -q --reload
+else
+  echo "  firewalld 没在运行：本机没有屏蔽 ICMP 时间戳请求，请在边界防火墙上屏蔽，见 deploy/DEPLOY.md「安全清单」"
 fi
 nginx -t
 systemctl enable nginx
