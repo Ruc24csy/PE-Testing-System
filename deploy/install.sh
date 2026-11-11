@@ -64,6 +64,8 @@ id pe >/dev/null 2>&1 || useradd -r -m -d /opt/pe-scores -s /usr/sbin/nologin pe
 mkdir -p "$APP_DIR" "$DATA_DIR"
 rsync -a --delete --exclude .venv --exclude data --exclude .git "$SRC_DIR/" "$APP_DIR/"
 chown -R pe:pe /opt/pe-scores "$DATA_DIR"
+# 后面以 pe 身份执行命令；当前目录若在 /root 下，pe 没权限读，uv 会报 Permission denied
+cd /opt/pe-scores
 
 step "安装 uv $UV_VERSION 与 Python $PYTHON_VERSION（系统自带 Python 版本过低）"
 if [[ "$(/usr/local/bin/uv --version 2>/dev/null | awk '{print $2}')" != "$UV_VERSION" ]]; then
