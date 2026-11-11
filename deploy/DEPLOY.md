@@ -11,7 +11,9 @@ git clone <仓库地址> /root/pe-scores && cd /root/pe-scores
 bash deploy/install.sh --domain <备案域名> --data-disk /dev/vdb --admin <工号>:<姓名>
 ```
 
-脚本会挂载数据盘、用 uv 装 Python 3.12（UOS V20 自带的 Python 版本过低）、装依赖、写配置、起 systemd 服务和 Nginx、配每日备份，并打印应急管理员的初始口令。可以重复执行；以后更新代码时 `git pull` 后再执行一次即可。数据盘已挂载过的，去掉 `--data-disk`。
+脚本会挂载数据盘、用 uv 装 Python 3.12（UOS V20 自带的 Python 版本过低）、装依赖、写配置、起 systemd 服务和 Nginx、配每日备份，并打印应急管理员的初始口令。
+
+下载走国内镜像：uv 和 Python 依赖用清华 PyPI 镜像，Python 本体用南京大学镜像（清华没有这个镜像），系统软件用 UOS 自带软件源。所有版本固定，清单见 [VERSIONS.md](VERSIONS.md)。可以重复执行；以后更新代码时 `git pull` 后再执行一次即可。数据盘已挂载过的，去掉 `--data-disk`。
 
 下面是脚本做的每一步，需要手工排查时参考。
 
@@ -33,7 +35,7 @@ sudo useradd -r -m -d /opt/pe-scores -s /usr/sbin/nologin pe
 sudo -u pe git clone <仓库地址> /opt/pe-scores/app
 cd /opt/pe-scores/app
 sudo -u pe python3 -m venv .venv
-sudo -u pe .venv/bin/pip install -r requirements.txt
+sudo -u pe .venv/bin/pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple -r requirements.lock
 sudo mkdir -p /data/pe-scores && sudo chown pe:pe /data/pe-scores
 ```
 
