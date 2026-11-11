@@ -17,7 +17,7 @@ bash deploy/install.sh --domain <备案域名> --data-disk /dev/vdb --admin <工
 
 已经拿到正式证书的，执行前先放到 `/etc/nginx/certs/<备案域名>.crt` 和 `/etc/nginx/certs/<备案域名>.key`（证书文件要含中间证书），脚本就不再生成临时证书。
 
-脚本同时支持用 dnf/yum 装软件的 UOS 服务器版（uelc20，与 CentOS 8 同类）和用 apt 的版本；SELinux 开着或 firewalld 在运行时，会自动放行 Nginx 转发和 80/443 端口。数据盘已挂载过的，去掉 `--data-disk`。
+脚本同时支持用 dnf/yum 装软件的 UOS 服务器版（uelc20，与 CentOS 8 同类）和用 apt 的版本；SELinux 开着或 firewalld 在运行时，会自动放行 Nginx 转发和 80/443 端口。数据盘已挂载过的，去掉 `--data-disk`。以后更新时也去掉 `--admin`：带着它会把应急管理员的口令重置成新的随机口令。
 
 下面是脚本做的每一步，需要手工排查时参考。
 
