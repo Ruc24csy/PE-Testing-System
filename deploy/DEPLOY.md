@@ -13,7 +13,11 @@ bash deploy/install.sh --domain <备案域名> --data-disk /dev/vdb --admin <工
 
 脚本会挂载数据盘、用 uv 装 Python 3.12（UOS V20 自带的 Python 版本过低）、装依赖、写配置、起 systemd 服务和 Nginx、配每日备份，并打印应急管理员的初始口令。
 
-下载走国内镜像：uv 和 Python 依赖用清华 PyPI 镜像，Python 本体用南京大学镜像（清华没有这个镜像），系统软件用 UOS 自带软件源。所有版本固定，清单见 [VERSIONS.md](VERSIONS.md)。可以重复执行；以后更新代码时 `git pull` 后再执行一次即可。数据盘已挂载过的，去掉 `--data-disk`。
+下载走国内镜像：uv 和 Python 依赖用清华 PyPI 镜像，Python 本体用南京大学镜像（清华没有这个镜像），系统软件用 UOS 自带软件源。所有版本固定，清单见 [VERSIONS.md](VERSIONS.md)。可以重复执行；以后更新代码时 `git pull` 后再执行一次即可。服务器连不上代码仓库时，把代码压缩包传到服务器解压到 `/root/pe-scores`，再在里面执行同一条命令。
+
+已经拿到正式证书的，执行前先放到 `/etc/nginx/certs/<备案域名>.crt` 和 `/etc/nginx/certs/<备案域名>.key`（证书文件要含中间证书），脚本就不再生成临时证书。
+
+脚本同时支持用 dnf/yum 装软件的 UOS 服务器版（uelc20，与 CentOS 8 同类）和用 apt 的版本；SELinux 开着或 firewalld 在运行时，会自动放行 Nginx 转发和 80/443 端口。数据盘已挂载过的，去掉 `--data-disk`。以后更新时也去掉 `--admin`：带着它会把应急管理员的口令重置成新的随机口令。
 
 下面是脚本做的每一步，需要手工排查时参考。
 
@@ -39,7 +43,7 @@ sudo -u pe .venv/bin/pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/we
 sudo mkdir -p /data/pe-scores && sudo chown pe:pe /data/pe-scores
 ```
 
-UOS 自带 Python 3.7 时，先装 3.10 以上版本（`apt install python3.10` 或源码编译）。
+UOS 自带的 Python 版本过低，先用 uv 装 3.12（做法见 `install.sh`）。
 
 ## 3. 配置并启动
 
@@ -56,7 +60,7 @@ sudo -u pe env $(cat /etc/pe-scores.env | xargs) .venv/bin/python scripts/manage
 ## 4. Nginx 与 HTTPS
 
 ```bash
-sudo apt install nginx
+sudo dnf install -y nginx     # apt 系的 UOS 用 apt install nginx
 sudo cp deploy/nginx.conf /etc/nginx/conf.d/pe-scores.conf   # 改成备案域名与证书路径
 sudo nginx -t && sudo systemctl reload nginx
 ```

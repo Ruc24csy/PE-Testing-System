@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 体育成绩录入平台一键安装（UOS V20 / Debian 系，root 执行）。可重复执行。
+# 体育成绩录入平台一键安装（UOS V20 服务器版，root 执行）。可重复执行。
+# 支持用 dnf/yum 装软件的版本（uelc20，与 CentOS 8 同类）和用 apt 的版本（与 Debian 同类）。
 #
 #   sudo bash deploy/install.sh --domain tykcjlr.ruc.edu.cn [--data-disk /dev/vdb] [--admin 工号:姓名]
 #
@@ -33,6 +34,18 @@ SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 step() { echo; echo "==> $*"; }
 
+step "安装系统依赖"
+if command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+  PM=$(command -v dnf || command -v yum)
+  "$PM" install -y nginx curl ca-certificates rsync unzip tar openssl parted e2fsprogs sudo cronie
+  systemctl enable --now crond
+elif command -v apt-get >/dev/null 2>&1; then
+  apt-get update -y
+  apt-get install -y nginx curl ca-certificates rsync unzip openssl parted sudo cron
+else
+  echo "找不到 dnf、yum 或 apt-get，无法安装系统软件"; exit 1
+fi
+
 if [[ -n "$DATA_DISK" ]]; then
   step "挂载数据盘 $DATA_DISK 到 /data"
   PART="${DATA_DISK}1"
@@ -46,15 +59,13 @@ if [[ -n "$DATA_DISK" ]]; then
   mountpoint -q /data || mount /data
 fi
 
-step "安装系统依赖"
-apt-get update -y
-apt-get install -y nginx curl ca-certificates rsync unzip
-
 step "建运行用户 pe 和目录"
 id pe >/dev/null 2>&1 || useradd -r -m -d /opt/pe-scores -s /usr/sbin/nologin pe
 mkdir -p "$APP_DIR" "$DATA_DIR"
 rsync -a --delete --exclude .venv --exclude data --exclude .git "$SRC_DIR/" "$APP_DIR/"
 chown -R pe:pe /opt/pe-scores "$DATA_DIR"
+# 后面以 pe 身份执行命令；当前目录若在 /root 下，pe 没权限读，uv 会报 Permission denied
+cd /opt/pe-scores
 
 step "安装 uv $UV_VERSION 与 Python $PYTHON_VERSION（系统自带 Python 版本过低）"
 if [[ "$(/usr/local/bin/uv --version 2>/dev/null | awk '{print $2}')" != "$UV_VERSION" ]]; then
@@ -109,7 +120,19 @@ if [[ ! -f "/etc/nginx/certs/$DOMAIN.crt" ]]; then
     -keyout "/etc/nginx/certs/$DOMAIN.key" -out "/etc/nginx/certs/$DOMAIN.crt"
   chmod 600 "/etc/nginx/certs/$DOMAIN.key"
 fi
-nginx -t && systemctl enable nginx && systemctl reload nginx || systemctl restart nginx
+if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce)" == "Enforcing" ]]; then
+  # SELinux 默认不许 Nginx 转发到本机 8000 端口
+  setsebool -P httpd_can_network_connect 1
+  restorecon -R /etc/nginx/certs /etc/nginx/conf.d 2>/dev/null || true
+fi
+if systemctl is-active -q firewalld 2>/dev/null; then
+  # 只放通本机防火墙的 80/443；对公网是否放通仍由学校的 WAF 和边界防火墙决定
+  firewall-cmd -q --permanent --add-service=http --add-service=https
+  firewall-cmd -q --reload
+fi
+nginx -t
+systemctl enable nginx
+if systemctl is-active -q nginx; then systemctl reload nginx; else systemctl restart nginx; fi
 
 step "每日备份"
 cp "$APP_DIR/deploy/pe-scores-backup.cron" /etc/cron.d/pe-scores-backup

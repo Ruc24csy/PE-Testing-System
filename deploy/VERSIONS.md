@@ -6,14 +6,14 @@
 
 | 类别 | 软件 | 版本 | 来源 |
 |---|---|---|---|
-| 操作系统 | 统信 UOS 服务器版 | V20 | 通州云平台分配 |
-| Web 服务器（中间件） | Nginx | 以服务器上 `nginx -v` 的输出为准 | UOS 自带软件源 |
+| 操作系统 | 统信 UOS 服务器版（UnionTech OS Server 20，uelc20） | V20 | 通州云平台分配 |
+| Web 服务器（中间件） | Nginx | 1.14.1 | UOS 自带软件源 |
 | 开发语言 | Python | 3.12.16 | 南京大学镜像（python-build-standalone） |
 | 数据库 | SQLite（单文件，随 Python 自带，无独立数据库服务） | 3.53.1 | 随 Python 一起 |
 | 应用服务器 | Uvicorn | 0.54.0 | 清华 PyPI 镜像 |
 | 安装工具 | uv | 0.13.7 | 清华 PyPI 镜像 |
 
-Nginx 的版本取决于服务器软件源，安装前可用 `apt-cache policy nginx` 查看会装哪个版本。
+Nginx 版本是 2026-11-11 在通州云平台服务器上用 `dnf info nginx` 查到的；软件源更新后以 `nginx -v` 为准。
 
 ## 后端主要组件
 
