@@ -17,7 +17,7 @@ bash deploy/install.sh --domain <备案域名> --data-disk /dev/vdb --admin <工
 
 已经拿到正式证书的，执行前先放到 `/etc/nginx/certs/<备案域名>.crt` 和 `/etc/nginx/certs/<备案域名>.key`（证书文件要含中间证书），脚本就不再生成临时证书。
 
-脚本同时支持用 dnf/yum 装软件的 UOS 服务器版（uelc20，与 CentOS 8 同类）和用 apt 的版本；SELinux 开着或 firewalld 在运行时，会自动放行 Nginx 转发和 80/443 端口，并屏蔽 ICMP 时间戳请求。数据盘已挂载过的，去掉 `--data-disk`。以后更新时也去掉 `--admin`：带着它会把应急管理员的口令重置成新的随机口令。
+脚本同时支持用 dnf/yum 装软件的 UOS 服务器版（uelc20，与 CentOS 8 同类）和用 apt 的版本；SELinux 开着或 firewalld 在运行时，会自动放行 Nginx 转发和 80/443 端口。数据盘已挂载过的，去掉 `--data-disk`。以后更新时也去掉 `--admin`：带着它会把应急管理员的口令重置成新的随机口令。
 
 下面是脚本做的每一步，需要手工排查时参考。
 
@@ -97,7 +97,7 @@ sudo cp deploy/pe-scores-backup.cron /etc/cron.d/pe-scores-backup
 
 - 首次登录修改服务器初始管理口令（≥8位，三类字符）。
 - 防火墙只对公网放通 80、443；SSH 10001 只允许堡垒机来源。
-- 屏蔽 ICMP 时间戳请求和应答，一键脚本已经做了：firewalld 在运行时加 icmp-block；没开 firewalld 时装 `deploy/block-icmp-timestamp.service`，开机用 iptables 丢掉这两类包。不要为此去启动 firewalld，它的默认规则不放行 SSH 的 10001 端口。
+- ICMP 时间戳（漏洞扫描的低危项）暂不处理，等信息技术中心的扫描报告确认后再定。不要为此去启动 firewalld，它的默认规则不放行 SSH 的 10001 端口。
 - SSH 关掉弱算法（见下面「SSH 加固」）。
 - 统一认证启用前 `PE_AUTH_MODE=local`；填好 `PE_SSO_CLIENT_SECRET` 后改为 `sso`。生产环境禁止使用 `dev`。
 - 数字人大账号、appid 的 secret 等凭据不写进代码仓库和文档，只写在 `/etc/pe-scores.env`。

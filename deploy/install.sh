@@ -161,18 +161,7 @@ fi
 if systemctl is-active -q firewalld 2>/dev/null; then
   # 只放通本机防火墙的 80/443；对公网是否放通仍由学校的 WAF 和边界防火墙决定
   firewall-cmd -q --permanent --add-service=http --add-service=https
-  # 不回应 ICMP 时间戳请求（漏洞扫描的「ICMP 时间戳检测」）
-  for t in timestamp-request timestamp-reply; do
-    firewall-cmd -q --permanent --query-icmp-block=$t || firewall-cmd -q --permanent --add-icmp-block=$t
-  done
   firewall-cmd -q --reload
-elif command -v iptables >/dev/null 2>&1; then
-  # 没开 firewalld 时不去启动它（默认规则不放行 SSH 的 10001 端口），改用开机加载的 iptables 规则
-  cp "$APP_DIR/deploy/block-icmp-timestamp.service" /etc/systemd/system/block-icmp-timestamp.service
-  systemctl daemon-reload
-  systemctl enable --now block-icmp-timestamp
-else
-  echo "  没有 firewalld 也没有 iptables：本机没有屏蔽 ICMP 时间戳请求，请在边界防火墙上屏蔽"
 fi
 nginx -t
 systemctl enable nginx
