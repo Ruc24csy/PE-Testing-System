@@ -97,7 +97,7 @@ sudo cp deploy/pe-scores-backup.cron /etc/cron.d/pe-scores-backup
 
 - 首次登录修改服务器初始管理口令（≥8位，三类字符）。
 - 防火墙只对公网放通 80、443；SSH 10001 只允许堡垒机来源。
-- 屏蔽 ICMP 时间戳请求和应答。firewalld 在运行时一键脚本已经做了；没有 firewalld 的，在边界防火墙上屏蔽，或执行 `iptables -A INPUT -p icmp --icmp-type timestamp-request -j DROP` 和 `iptables -A OUTPUT -p icmp --icmp-type timestamp-reply -j DROP`（要写进开机加载的规则里）。
+- 屏蔽 ICMP 时间戳请求和应答，一键脚本已经做了：firewalld 在运行时加 icmp-block；没开 firewalld 时装 `deploy/block-icmp-timestamp.service`，开机用 iptables 丢掉这两类包。不要为此去启动 firewalld，它的默认规则不放行 SSH 的 10001 端口。
 - SSH 关掉弱算法（见下面「SSH 加固」）。
 - 统一认证启用前 `PE_AUTH_MODE=local`；填好 `PE_SSO_CLIENT_SECRET` 后改为 `sso`。生产环境禁止使用 `dev`。
 - 数字人大账号、appid 的 secret 等凭据不写进代码仓库和文档，只写在 `/etc/pe-scores.env`。

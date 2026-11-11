@@ -166,8 +166,13 @@ if systemctl is-active -q firewalld 2>/dev/null; then
     firewall-cmd -q --permanent --query-icmp-block=$t || firewall-cmd -q --permanent --add-icmp-block=$t
   done
   firewall-cmd -q --reload
+elif command -v iptables >/dev/null 2>&1; then
+  # 没开 firewalld 时不去启动它（默认规则不放行 SSH 的 10001 端口），改用开机加载的 iptables 规则
+  cp "$APP_DIR/deploy/block-icmp-timestamp.service" /etc/systemd/system/block-icmp-timestamp.service
+  systemctl daemon-reload
+  systemctl enable --now block-icmp-timestamp
 else
-  echo "  firewalld 没在运行：本机没有屏蔽 ICMP 时间戳请求，请在边界防火墙上屏蔽，见 deploy/DEPLOY.md「安全清单」"
+  echo "  没有 firewalld 也没有 iptables：本机没有屏蔽 ICMP 时间戳请求，请在边界防火墙上屏蔽"
 fi
 nginx -t
 systemctl enable nginx
