@@ -39,6 +39,7 @@ app.add_middleware(SessionMiddleware, secret_key=config.SECRET_KEY, session_cook
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     resp = await call_next(request)
+    # 生产环境的完整安全头（CSP 等）在 deploy/nginx.conf 里加，Nginx 会去掉下面这几个重复的
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Referrer-Policy", "same-origin")
@@ -146,8 +147,11 @@ def local_login(request: Request, staff_no: str = Body(...), password: str = Bod
 
 
 @app.post("/auth/logout")
-def logout(request: Request):
+def logout(request: Request, response: Response):
     request.session.clear()
+    # 只清浏览器缓存。不清 "storage"：录入页把没保存上的成绩暂存在 localStorage，下次登录自动补存；
+    # 不清 "cookies"：它作用于整个注册域（ruc.edu.cn），会把同域其他系统也登出。会话 cookie 已由上一行作废。
+    response.headers["Clear-Site-Data"] = '"cache"'
     return {"ok": True, "redirect": config.SSO_LOGOUT_URL if config.AUTH_MODE == "sso" else "/"}
 
 

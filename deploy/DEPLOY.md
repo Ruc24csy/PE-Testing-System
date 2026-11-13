@@ -81,7 +81,42 @@ nginx -v                             # 应为 1.30 及以上
 
 apt 系的 UOS 没有可用的 Nginx 官方源，只能装系统源的版本；一键脚本会给出警告，并在版本低于 1.25 时关掉 HTTP/2。
 
-配置里已经做了这几项加固：80 端口强制跳转 443；不显示 Nginx 版本号；只允许 TLS 1.2/1.3，只用 ECDHE 密钥交换（不支持 RSA 密钥交换）。证书使用学校统一证书或信息技术中心签发的证书。
+配置里已经做了这几项加固（对应信息技术中心 2026-11-11 的应用漏洞简报）：
+
+- 80 端口强制跳转 443，用 `http://` 访问 443 端口也跳到 https。
+- Host 头不是备案域名的请求直接断开连接（防 Host 头攻击）。因此用服务器 IP 直接访问会打不开；确实要用 IP 访问时，在 `/etc/nginx/conf.d/pe-scores.conf` 里两处带域名的 `server_name` 后面加上 IP。
+- 安全响应头：CSP、HSTS（含 includeSubDomains）、X-Frame-Options、X-Content-Type-Options、Referrer-Policy、X-XSS-Protection、X-Download-Options、X-Permitted-Cross-Domain-Policies、Cross-Origin-Opener-Policy、Cross-Origin-Resource-Policy、Permissions-Policy。
+- 不显示 Nginx 版本号；只允许 TLS 1.2/1.3，只用 ECDHE 密钥交换（不支持 RSA 密钥交换）。
+
+退出登录接口另带 `Clear-Site-Data: "cache"`，由应用加，只清浏览器缓存。不清 storage：录入页把没保存上的成绩暂存在浏览器本地，下次登录自动补存；不清 cookies：它作用于整个 ruc.edu.cn，会把同域其他系统也登出。这个头只在退出接口上，扫描器扫首页仍可能报「缺少 Clear-Site-Data」，按此说明即可。
+
+证书使用学校统一证书或信息技术中心签发的证书。
+
+### 已上线的服务器更新这份配置
+
+Nginx 配置和应用代码都有改动，重新执行一键脚本即可（去掉 `--data-disk` 和 `--admin`）：
+
+```bash
+cd /root/pe-scores && git pull          # 连不上仓库时，把新代码包解压覆盖到这里
+sudo bash deploy/install.sh --domain <备案域名>
+```
+
+只想单独更新 Nginx 配置时：
+
+```bash
+cd /root/pe-scores
+sudo cp /etc/nginx/conf.d/pe-scores.conf /root/pe-scores.conf.bak.$(date +%Y%m%d)
+sudo sed -e "s#pe.example.edu.cn#<备案域名>#g" deploy/nginx.conf | sudo tee /etc/nginx/conf.d/pe-scores.conf >/dev/null
+sudo nginx -t && sudo systemctl reload nginx     # -t 报错就把备份拷回去
+```
+
+更新后在服务器上自查：
+
+```bash
+curl -skI https://<备案域名>/ --resolve <备案域名>:443:127.0.0.1 | grep -iE 'content-security|strict-transport|permissions'
+curl -sI http://127.0.0.1/ -H 'Host: evil.com'      # 应为 Empty reply（连接被断开）
+curl -sI http://<备案域名>:443/ --resolve <备案域名>:443:127.0.0.1 | grep -i location   # 应跳到 https
+```
 
 以后要升级 Nginx，执行 `sudo dnf upgrade -y nginx`，或者重新执行一键脚本。
 
@@ -97,7 +132,8 @@ sudo cp deploy/pe-scores-backup.cron /etc/cron.d/pe-scores-backup
 
 - 首次登录修改服务器初始管理口令（≥8位，三类字符）。
 - 防火墙只对公网放通 80、443；SSH 10001 只允许堡垒机来源。
-- ICMP 时间戳（漏洞扫描的低危项）暂不处理，等信息技术中心的扫描报告确认后再定。不要为此去启动 firewalld，它的默认规则不放行 SSH 的 10001 端口。
+- ICMP 时间戳（系统漏洞简报里唯一的低危项）用 iptables 屏蔽。不要为此去启动 firewalld，它的默认规则不放行 SSH 的 10001 端口。见下面「服务器侧加固」。
+- 关掉用不到的 rpcbind（111 端口），见下面「服务器侧加固」。
 - SSH 关掉弱算法（见下面「SSH 加固」）。
 - 统一认证启用前 `PE_AUTH_MODE=local`；填好 `PE_SSO_CLIENT_SECRET` 后改为 `sso`。生产环境禁止使用 `dev`。
 - 数字人大账号、appid 的 secret 等凭据不写进代码仓库和文档，只写在 `/etc/pe-scores.env`。
@@ -126,3 +162,35 @@ sudo cp deploy/pe-scores-backup.cron /etc/cron.d/pe-scores-backup
 4. 用新会话登录一次，确认能登上再关掉旧会话。
 
 SSH 的版本号是协议握手的一部分，不重新编译 OpenSSH 去不掉。这一项只是信息泄露，SSH 端口只允许堡垒机访问就够了。
+
+## 8. 服务器侧加固
+
+对应信息技术中心 2026-11-11 的系统漏洞简报，和网站代码无关，由管服务器的人执行。
+
+1. 关掉 rpcbind（111 端口）。本系统用不到；服务器挂了 NFS 的先别关：
+
+   ```bash
+   mount | grep -q nfs && echo "有 NFS 挂载，先别关" || sudo systemctl disable --now rpcbind rpcbind.socket
+   ss -lntu | grep ':111 ' || echo "111 端口已关闭"
+   ```
+
+2. 屏蔽 ICMP 时间戳请求和应答，并保存成开机自动加载：
+
+   ```bash
+   sudo iptables -I INPUT -p icmp --icmp-type timestamp-request -j DROP
+   sudo iptables -I OUTPUT -p icmp --icmp-type timestamp-reply -j DROP
+   sudo iptables -S | grep timestamp
+   # dnf 系：装 iptables-services 后保存（不要启动 firewalld）
+   sudo dnf install -y iptables-services && sudo service iptables save && sudo systemctl enable iptables
+   ```
+
+   `service iptables save` 会把当前全部规则写进 `/etc/sysconfig/iptables`。保存前先 `sudo iptables -S` 看一眼，确认里面没有会挡住 10001 端口的规则。
+
+## 9. 漏洞扫描里不修的项
+
+和学校说明即可：
+
+- Server 头显示 nginx：版本号已隐藏。官方版 Nginx 去不掉这个头，要额外编译模块，不值得。
+- 检测到反向代理、SSL 协议与加密算法、证书详情、SSH 支持的算法：报告自己标注为探测类，无需修改（SSH 算法已按第 7 节收紧）。
+- SSH 版本信息可被获取：OpenSSH 握手协议本身要报版本，去不掉。10001 端口只对堡垒机开放即可。
+- 操作系统识别为 Linux 2.6.18：扫描器误判，不用处理。

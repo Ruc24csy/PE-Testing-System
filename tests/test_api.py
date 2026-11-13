@@ -342,3 +342,14 @@ def test_preview_does_not_save(admin):
     assert pr["subtotal"] is not None and pr["total"] is not None
     again = next(x for x in admin.get(f"/api/classes/{cid}").json()["rows"] if x["student_no"] == "2025200002")
     assert again["values"]["regular"] == before  # 没有写库
+
+
+def test_logout_clears_cache_only():
+    init_db()
+    c = TestClient(app)
+    assert c.post("/api/auth/dev-login", json={"staff_no": "T001"}).status_code == 200
+    r = c.post("/auth/logout")
+    assert r.status_code == 200
+    # 只清缓存：本地存储里有未保存的成绩草稿，cookies 会波及同域其他系统
+    assert r.headers["Clear-Site-Data"] == '"cache"'
+    assert c.get("/api/me").status_code == 401
