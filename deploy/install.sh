@@ -65,6 +65,8 @@ REPO
 elif command -v apt-get >/dev/null 2>&1; then
   apt-get update -y
   apt-get install -y nginx curl ca-certificates rsync unzip openssl parted sudo cron
+  # 系统自带的默认站点也声明了 default_server，和本站拒绝未知 Host 的配置冲突
+  rm -f /etc/nginx/sites-enabled/default
 else
   echo "找不到 dnf、yum 或 apt-get，无法安装系统软件"; exit 1
 fi
