@@ -366,6 +366,7 @@ function renderRows(C) {
   const tb = $("#grid tbody");
   updateExcellence(C);
   tb.innerHTML = sortedRows(C).filter((r) => rowVisible(C, r)).map((r, i) => rowHtml(C, r, i + 1)).join("") || `<tr><td colspan="24" class="muted" style="padding:20px">没有符合条件的学生</td></tr>`;
+  stickGridHead();
 }
 function rowHtml(C, r, no) {
   const ed = C.d.editable;
@@ -375,6 +376,10 @@ function rowHtml(C, r, no) {
     const key = `${r.enrollment_id}:${field}`; const err = C.errors.get(key);
     if (slot && v[`${k}_status`] !== "正常") {
       return `<td class="in ro"><div class="seg st-only" data-e="${r.enrollment_id}" data-f="${field}"><button class="link stTag" data-e="${r.enrollment_id}" title="点击修改特殊情况">${esc(v[`${k}_status`])}</button></div></td>`;
+    }
+    // 课程成绩标了缓考、缺考、退课：技能和平时两格不再录入，显示状态，点开「更多」
+    if (!slot && r.course_status && r.course_status !== "正常") {
+      return `<td class="in ro"><div class="seg st-only" data-e="${r.enrollment_id}" data-f="${field}"><button class="link stTag" data-e="${r.enrollment_id}" title="课程成绩${esc(r.course_status)}，点击修改">${esc(r.course_status)}</button></div></td>`;
     }
     const ro = !ed || (slot && (!r.gender_code || C.d.pe_locked));
     const pend = C.queue.get(key);
@@ -511,6 +516,18 @@ function commitSeg(C, seg) {
   if (val !== (seg.dataset.orig ?? "")) enqueue(C, Number(seg.dataset.e), seg.dataset.f, val);
   seg.dataset.orig = val;
 }
+
+/* 录入表随整页滚动；外框只管横向滚动，表头靠位移贴在顶栏下方 */
+function stickGridHead() {
+  const wrap = $(".grid-wrap"); const head = wrap && $("#grid thead");
+  if (!head) return;
+  const bar = $(".topbar"); const top = bar ? bar.getBoundingClientRect().bottom : 0;
+  const box = wrap.getBoundingClientRect();
+  const y = Math.max(0, Math.min(top - box.top, box.height - head.offsetHeight));
+  wrap.style.setProperty("--head-y", `${y}px`);
+}
+window.addEventListener("scroll", stickGridHead, { passive: true });
+window.addEventListener("resize", stickGridHead);
 
 function bindClass(C) {
   const grid = $("#grid");
