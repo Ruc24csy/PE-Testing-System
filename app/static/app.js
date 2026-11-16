@@ -229,7 +229,7 @@ function segSpec(C, item, field) {
       join: (a) => a[0], split: (t) => [String(t ?? "")] };
   }
   if (item === "run1000" || item === "run800") {
-    return { segs: [{ n: 1, after: "'" }, { n: 2, after: "\"", dec: true, max: 4, full: () => false }],
+    return { segs: [{ n: 1, after: "'" }, { n: 2, after: "\"", full: () => false }],
       join: (a) => (a[0] === "" && a[1] === "" ? "" : `${a[0] || 0}'${(a[1] || "0").padStart(2, "0")}"`),
       split: (t) => {
         const s = String(t ?? "").trim(); if (!s) return ["", ""];
