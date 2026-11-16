@@ -23,7 +23,6 @@ from .models import (AuditLog, Enrollment, GradeCorrection, ScoreHistory, ScoreR
                      Student, TeachingClass, UnlockRequest, User, init_db, now)
 
 STATIC = Path(__file__).parent / "static"
-WEEKDAYS = {"星期一": 1, "星期二": 2, "星期三": 3, "星期四": 4, "星期五": 5, "星期六": 6, "星期日": 7, "星期天": 7}
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -320,11 +319,8 @@ def list_classes(sid: int, course: str = "", campus: str = "", scope: str = "min
             if services.is_excellent((comp or {}).get("total")):
                 excellent[cid] = excellent.get(cid, 0) + 1
 
-    def key(c):
-        p = re.findall(r"\d{2}", c.periods or "")
-        return (WEEKDAYS.get(c.weekday, 9), int(p[0]) if p else 99, c.course_name, c.class_name)
-
-    classes.sort(key=key)
+    # 按教学班名称排序，同名再按教学班号（教师“我的教学班”和管理端全部班列表一致）
+    classes.sort(key=lambda c: (c.class_name or "", c.class_no or ""))
     all_courses = sorted(set(db.scalars(select(TeachingClass.course_name).where(TeachingClass.semester_id == sid))))
     has_any = db.scalar(select(func.count()).select_from(TeachingClass).where(TeachingClass.semester_id == sid)) > 0
     return {"semester": sem_dict(sem), "imported": has_any, "courses": all_courses,
@@ -798,6 +794,8 @@ def admin_import_commit(request: Request, body: dict = Body(...), u: User = Depe
     rep, plan = importer.precheck(db, kind, rows, mapping, sem, mode)
     if rep.blocking:
         raise HTTPException(400, "预检有阻断性错误，请修正后重新上传")
+    if plan.get("scored_impact") and not body.get("confirm_scored"):
+        raise HTTPException(400, "这次导入会动到已有成绩的教学班，须确认后再导入：" + plan["scored_impact"]["message"])
     result = importer.commit(db, kind, rows, sem, mode, u.staff_no)
     importer.remember_mapping(db, kind, mapping)
     services.log(db, u.staff_no, "导入", importer.KIND_NAMES[kind], sem.id if sem else None, ip=client_ip(request),
@@ -887,8 +885,7 @@ def student_standard(sid: int, no: str, u: User = Depends(admin_user), db: Sessi
                        .order_by(GradeCorrection.id.desc())).all()
     st = db.get(Student, no)
     return {"standard": _snap_dict(snap),
-            "student": None if not st else {"name": st.name, "gender": st.gender, "college": st.college,
-                                            "grade": st.grade, "class_name": st.class_name},
+            "student": None if not st else {"name": st.name, "gender": st.gender, "college": st.college},
             "corrections": [{"cohort": c.cohort, "band": c.band, "change_type": c.change_type,
                              "effective_semester": c.effective_semester, "note": c.note, "operator": c.operator,
                              "at": c.created_at.strftime("%Y-%m-%d %H:%M")} for c in corrs]}
@@ -932,7 +929,7 @@ def set_standard(sid: int, no: str, request: Request, body: dict = Body(...), u:
 
 # ---------------------------------------------------------------- 管理端：学生信息与选课的手动维护
 
-STUDENT_FIELDS = ("name", "college", "major", "class_name", "grade")
+STUDENT_FIELDS = ("name", "college")  # 班级、专业、年级不再存（以选课表为准）
 ENROLL_FIELDS = ("name", "class_label", "major", "grade_field", "college", "campus")
 
 
@@ -940,7 +937,7 @@ def _student_dict(st: Student | None) -> dict | None:
     if not st:
         return None
     return {"student_no": st.student_no, "name": st.name, "gender": st.gender, "college": st.college,
-            "major": st.major, "class_name": st.class_name, "grade": st.grade, "manual": st.manual}
+            "manual": st.manual}
 
 
 def _enroll_dict(e: Enrollment, c: TeachingClass) -> dict:

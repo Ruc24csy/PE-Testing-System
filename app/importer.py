@@ -60,10 +60,7 @@ FIELDS = {
         ("name", "姓名", False, ["姓名"]),
         ("gender", "性别", True, ["性别"]),
         ("college", "院系所名称", False, ["院系所名称", "院系", "学院"]),
-        ("class_name", "班级", False, ["班级"]),
-        ("grade", "年级", False, ["年级"]),
-        ("school", "学校", False, ["学校"]),
-        ("major", "专业", False, ["专业"]),
+        # 班级、专业、年级、学校不识别也不存：显示用选课表的上课班级/专业，年级按上课年级和学号推算
     ],
 }
 KIND_NAMES = {"schedule": "课程安排表", "enroll": "学生选课表", "base": "学生基础数据表"}
@@ -326,7 +323,12 @@ def precheck(db: Session, kind: str, rows: list[dict], mapping: dict, semester: 
                     [r["_row"] for r in valid if r["student_no"] in set(unknown)])
         plan = {"rows": len(valid), "students": len(per), "classes": len({r["class_no"] for r in valid}),
                 "skipped_closed": sum(len(v) for v in missing.values())}
-    elif kind == "base":
+    if kind in ("schedule", "enroll") and semester is not None and not rep.blocking:
+        imp = scored_impact(db, kind, rows, semester, mode)
+        if imp:
+            plan["scored_impact"] = imp
+            rep.add("warn", imp["message"], advice="确认导入时需再次确认", key="scored_impact")
+    if kind == "base":
         blank = [r["_row"] for r in rows if not r.get("student_no")]
         if blank:
             rep.add("warn", f"{len(blank)} 行学号为空，导入时剔除", blank)
@@ -352,6 +354,92 @@ def _has_scores(db: Session, enrollment_ids: list[int]) -> set[int]:
     return out
 
 
+def _schedule_values(r: dict) -> dict:
+    """课程安排表一行写进教学班的各字段（commit 和覆盖影响预估共用）。"""
+    v = {"course_name": r.get("course_name", ""), "course_code": r.get("course_code", ""),
+         "class_name": r.get("class_name", "") or r.get("course_name", ""),
+         "teacher_name": r.get("teacher_name", ""), "staff_no": r.get("staff_no", ""),
+         "location": r.get("location", ""), "weekday": r.get("weekday", ""), "periods": r.get("periods", ""),
+         "weeks": r.get("weeks", ""), "audience": r.get("audience", ""),
+         "enrolled_count": clean_int(r.get("enrolled_count")), "course_nature": r.get("course_nature", "")}
+    v["teacher_pending"] = (not v["staff_no"]) or "体育部" in v["teacher_name"] or not v["teacher_name"]
+    return v
+
+
+def _scored_class_ids(db: Session, semester: Semester) -> set[int]:
+    return set(db.scalars(select(Enrollment.class_id).join(
+        ScoreRecord, ScoreRecord.enrollment_id == Enrollment.id).where(
+        Enrollment.semester_id == semester.id).distinct()))
+
+
+def scored_impact(db: Session, kind: str, rows: list[dict], semester: Semester, mode: str) -> dict | None:
+    """覆盖/重建导入会动到哪些已有成绩的教学班。没有影响返回 None。
+
+    课程安排表：已有成绩、且这次导入会改动其课程信息的班（其中多少个换了任课教师工号）。
+    学生选课表：已有成绩的班里，会被停用的有成绩学生、会被删除的无成绩学生。
+    口径与 commit 一致：手动维护过的选课记录不动；“追加”“新增”不改已有班。
+    """
+    if mode not in ("overwrite", "rebuild"):
+        return None
+    scored = _scored_class_ids(db, semester)
+    if not scored:
+        return None
+    classes = {c.class_no: c for c in db.scalars(
+        select(TeachingClass).where(TeachingClass.semester_id == semester.id))}
+    if kind == "schedule":
+        seen = {}
+        for r in rows:
+            if r.get("class_no") and r["class_no"] not in seen:
+                seen[r["class_no"]] = r
+        changed, teacher = [], 0
+        for no, r in seen.items():
+            c = classes.get(no)
+            if c is None or c.id not in scored:
+                continue
+            new = _schedule_values(r)
+            if any((getattr(c, k) or type(v)()) != v for k, v in new.items()):
+                changed.append(no)
+                if (c.staff_no or "") != new["staff_no"]:
+                    teacher += 1
+        if not changed:
+            return None
+        msg = f"这次导入会改动 {len(changed)} 个已有成绩的教学班的课程信息"
+        if teacher:
+            msg += f"，其中 {teacher} 个班的教工号会变，这些班将转到新教师名下"
+        return {"classes": len(changed), "teacher_changed": teacher, "class_nos": changed[:50], "message": msg + "。"}
+    if kind != "enroll":
+        return None
+    by_class: dict[str, set[str]] = defaultdict(set)
+    for r in rows:
+        if r.get("class_no") in classes and r.get("student_no"):
+            by_class[r["class_no"]].add(r["student_no"])
+    targets = list(by_class) if mode != "rebuild" else list(classes)
+    n_cls = deact = delete = 0
+    nos = []
+    for no in targets:
+        c = classes[no]
+        if c.id not in scored:
+            continue
+        incoming = by_class.get(no, set())
+        gone = [e for e in db.scalars(select(Enrollment).where(Enrollment.class_id == c.id))
+                if e.student_no not in incoming and not e.manual]
+        if not gone:
+            continue
+        has = _has_scores(db, [e.id for e in gone])
+        d = sum(1 for e in gone if e.id in has and e.active)
+        x = sum(1 for e in gone if e.id not in has)
+        if d or x:
+            n_cls += 1
+            deact += d
+            delete += x
+            nos.append(no)
+    if not n_cls:
+        return None
+    return {"classes": n_cls, "deactivate": deact, "delete": delete, "class_nos": nos[:50],
+            "message": f"涉及 {n_cls} 个已有成绩的教学班，将停用 {deact} 名有成绩的学生（成绩保留）、"
+                       f"删除 {delete} 名无成绩的学生。"}
+
+
 def commit(db: Session, kind: str, rows: list[dict], semester: Semester | None, mode: str,
            operator: str) -> dict:
     if kind == "base":
@@ -371,8 +459,7 @@ def commit(db: Session, kind: str, rows: list[dict], semester: Semester | None, 
                 continue  # 管理员手动改过的不覆盖
             s.name = r.get("name", "")
             s.gender = {"男": "M", "女": "F"}.get(r.get("gender", ""))
-            s.college, s.class_name = r.get("college", ""), r.get("class_name", "")
-            s.grade, s.major = r.get("grade", ""), r.get("major", "")
+            s.college = r.get("college", "")
         db.flush()
         result = {"students": len(seen), "new": n_new}
         for sem in db.scalars(select(Semester)):
@@ -397,14 +484,8 @@ def commit(db: Session, kind: str, rows: list[dict], semester: Semester | None, 
                 created += 1
             else:
                 updated += 1
-            c.course_name, c.course_code = r.get("course_name", ""), r.get("course_code", "")
-            c.class_name = r.get("class_name", "") or r.get("course_name", "")
-            c.teacher_name, c.staff_no = r.get("teacher_name", ""), r.get("staff_no", "")
-            c.location, c.weekday, c.periods = r.get("location", ""), r.get("weekday", ""), r.get("periods", "")
-            c.weeks, c.audience = r.get("weeks", ""), r.get("audience", "")
-            c.enrolled_count = clean_int(r.get("enrolled_count"))
-            c.course_nature = r.get("course_nature", "")
-            c.teacher_pending = (not c.staff_no) or "体育部" in c.teacher_name or not c.teacher_name
+            for k, v in _schedule_values(r).items():
+                setattr(c, k, v)
             if not c.teacher_pending:
                 u = db.get(User, c.staff_no)
                 if u is None:

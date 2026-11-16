@@ -893,13 +893,18 @@ function impMapping(info, sem) {
     const a = args(); $("#impReport").innerHTML = `<p class="muted">预检中…</p>`;
     try {
       const r = await api("/api/admin/import/precheck", { method: "POST", body: a });
-      const plan = Object.entries(r.plan).map(([k, v]) => `${({ total: "教学班", new: "新增", update: "更新", absent: "文件中没有的已有教学班", rows: "有效记录", students: "学生", classes: "教学班", skipped_closed: "关闭班记录（不导入）", male: "男", female: "女" })[k] || k} ${v}`).join("，");
+      const impact = r.plan.scored_impact;
+      const plan = Object.entries(r.plan).filter(([k]) => k !== "scored_impact").map(([k, v]) => `${({ total: "教学班", new: "新增", update: "更新", absent: "文件中没有的已有教学班", rows: "有效记录", students: "学生", classes: "教学班", skipped_closed: "关闭班记录（不导入）", male: "男", female: "女" })[k] || k} ${v}`).join("，");
       $("#impReport").innerHTML = `<h3>预检报告</h3><p>共读取 ${r.rows} 行。${esc(plan)}</p>
         <ul class="report">${r.items.map((i) => `<li class="lv-${i.level}">【${({ error: "阻断", warn: "提示", info: "说明" })[i.level]}】${esc(i.message)}${i.advice ? `<span class="muted"> — ${esc(i.advice)}</span>` : ""}${i.rows.length ? `<div class="small muted">行号：${i.rows.slice(0, 30).join("、")}${i.row_count > 30 ? " …" : ""}</div>` : ""}</li>`).join("") || "<li>未发现问题</li>"}</ul>
         <div class="row"><button class="primary" id="impGo" ${r.blocking ? "disabled" : ""}>确认导入</button>${r.blocking ? '<span class="muted">请先处理“阻断”项</span>' : ""}</div>`;
       if (!r.blocking) $("#impGo").onclick = async () => {
-        if (a.mode === "rebuild" && !confirm("重建将以本文件为准：文件中没有、且尚无成绩的教学班和名单会被删除（已有成绩的保留）。确定继续？")) return;
+        const msgs = [];
+        if (a.mode === "rebuild") msgs.push("重建将以本文件为准：文件中没有、且尚无成绩的教学班和名单会被删除（已有成绩的保留）。");
+        if (impact) msgs.push(`${impact.message}${impact.class_nos && impact.class_nos.length ? `\n涉及教学班号：${impact.class_nos.slice(0, 10).join("、")}${impact.classes > 10 ? " 等" : ""}` : ""}`);
+        if (msgs.length && !confirm(msgs.join("\n\n") + "\n\n确定继续导入？")) return;
         a.confirm_rebuild = a.mode === "rebuild";
+        a.confirm_scored = !!impact;
         try { const res = await api("/api/admin/import/commit", { method: "POST", body: a }); $("#impReport").innerHTML = `<div class="notice info">导入完成：${esc(JSON.stringify(res.result))}</div>`; toast("导入完成"); }
         catch (e) { toast(e.message, true); }
       };
@@ -973,9 +978,8 @@ async function studentEditor(sem, no, done) {
       <div>性别 <span style="color:var(--err)">*</span></div><div><select id="sxG"><option value="">请选择</option><option value="M" ${st.gender === "M" ? "selected" : ""}>男</option><option value="F" ${st.gender === "F" ? "selected" : ""}>女</option></select></div>
       <div>姓名</div><div><input type="text" id="sxN" value="${esc(st.name || (d.enrollments[0] && d.enrollments[0].name) || "")}"></div>
       <div>学院</div><div><input type="text" id="sxC" value="${esc(st.college || (d.enrollments[0] && d.enrollments[0].college) || "")}"></div>
-      <div>专业</div><div><input type="text" id="sxM" value="${esc(st.major || "")}"></div>
-      <div>班级</div><div><input type="text" id="sxK" value="${esc(st.class_name || "")}"></div>
-      <div>年级</div><div><input type="text" id="sxY" value="${esc(st.grade || "")}"></div></div>
+</div>
+    <p class="muted small">上课班级、专业、年级以选课记录为准，在下方各条选课里修改。</p>
     <div class="row" style="margin-top:8px"><span class="spacer"></span><button class="primary" id="sxSave">保存基础信息</button></div>
     <h4>本学期选课（${d.enrollments.filter((e) => e.active).length}）</h4>
     ${d.enrollments.map(enrollRow).join("") || '<p class="muted">本学期没有选课记录</p>'}
@@ -983,7 +987,7 @@ async function studentEditor(sem, no, done) {
     <p class="muted small">调班时已录的成绩跟着学生转到新班，原班留一条“已移出”记录，避免以后重新导入时又被加回原班。</p>`, (el) => {
     const reload = () => { done && done(); studentEditor(sem, no, done); };
     $("#sxSave", el).onclick = async () => {
-      try { await api(`/api/admin/semesters/${sem.id}/student/${encodeURIComponent(no)}`, { method: "PUT", body: { gender: $("#sxG", el).value, name: $("#sxN", el).value, college: $("#sxC", el).value, major: $("#sxM", el).value, class_name: $("#sxK", el).value, grade: $("#sxY", el).value } }); toast("已保存，标准档与成绩已重算"); reload(); }
+      try { await api(`/api/admin/semesters/${sem.id}/student/${encodeURIComponent(no)}`, { method: "PUT", body: { gender: $("#sxG", el).value, name: $("#sxN", el).value, college: $("#sxC", el).value } }); toast("已保存，标准档与成绩已重算"); reload(); }
       catch (e) { toast(e.message, true); }
     };
     $$("[data-eid]", el).forEach((box) => {
@@ -998,7 +1002,7 @@ async function studentEditor(sem, no, done) {
     });
     $("#sxAddBtn", el).onclick = async () => {
       const cid = Number($("#sxAdd", el).value); if (!cid) return toast("请选择教学班", true);
-      try { await api(`/api/admin/semesters/${sem.id}/enrollments`, { method: "POST", body: { student_no: no, class_id: cid, name: $("#sxN", el).value, college: $("#sxC", el).value, major: $("#sxM", el).value } }); toast("已加入"); reload(); }
+      try { await api(`/api/admin/semesters/${sem.id}/enrollments`, { method: "POST", body: { student_no: no, class_id: cid, name: $("#sxN", el).value, college: $("#sxC", el).value } }); toast("已加入"); reload(); }
       catch (e) { toast(e.message, true); }
     };
   });
