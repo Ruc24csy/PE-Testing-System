@@ -37,9 +37,14 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     u = db.get(User, staff_no)
     if u is None:
         raise HTTPException(401, "请先登录")
-    if u.must_change_password and request.url.path not in ("/api/me", "/api/me/password", "/auth/logout"):
+    if must_change_password(request, u) and request.url.path not in ("/api/me", "/api/me/password", "/auth/logout"):
         raise HTTPException(403, "首次登录请先修改初始口令")
     return u
+
+
+def must_change_password(request: Request, u: User) -> bool:
+    """只有用本地口令登录的会话才要求先改初始口令；统一认证登录不用本地口令，不拦。"""
+    return bool(u.must_change_password) and request.session.get("login_method") == "local"
 
 
 def admin_user(u: User = Depends(current_user)) -> User:

@@ -123,9 +123,15 @@ step "写配置 $ENV_FILE"
 if [[ ! -f "$ENV_FILE" ]]; then
   sed -e "s#pe.example.edu.cn#$DOMAIN#g" "$APP_DIR/deploy/pe-scores.env.example" > "$ENV_FILE"
   echo "PE_SECRET_KEY=$(head -c 48 /dev/urandom | base64 | tr -d '\n/+=')" >> "$ENV_FILE"
-  echo "  已生成配置（临时口令登录 local 模式）；拿到 secret 后在 $ENV_FILE 里填 PE_SSO_CLIENT_SECRET、把 PE_AUTH_MODE 改成 sso，再 systemctl restart pe-scores"
+  echo "  已生成配置 $ENV_FILE"
 fi
 chown root:pe "$ENV_FILE"; chmod 640 "$ENV_FILE"
+if grep -qE '^PE_AUTH_MODE=local' "$ENV_FILE"; then
+  echo "  已取消 local（教师口令登录）模式：把 $ENV_FILE 里的 PE_AUTH_MODE 改成 sso，再重新执行本脚本"; exit 1
+fi
+if grep -qE '^PE_AUTH_MODE=sso' "$ENV_FILE" && grep -qE '^PE_SSO_CLIENT_SECRET=\s*$' "$ENV_FILE"; then
+  echo "  还没填统一认证的 secret：在 $ENV_FILE 里填 PE_SSO_CLIENT_SECRET，再重新执行本脚本"; exit 1
+fi
 
 step "初始化数据库"
 sudo -u pe bash -c "set -a; . $ENV_FILE; set +a; cd $APP_DIR && .venv/bin/python scripts/manage.py init"

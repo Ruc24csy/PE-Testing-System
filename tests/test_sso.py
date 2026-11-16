@@ -112,3 +112,22 @@ def test_sso_category_fallback_by_length(sso, login, ok):
     state = start(c)
     r = c.get(f"/?code=CODE&state={state}", follow_redirects=False)
     assert (r.headers["location"] == "/") is ok
+
+
+def test_sso_login_skips_initial_password_change(sso):
+    """应急管理员的账号发过初始口令、还没改：走统一认证登录时不被拦去改口令页。"""
+    from app.models import SessionLocal, User
+    db = SessionLocal()
+    u = db.get(User, "20200089") or User(staff_no="20200089")
+    u.password_hash, u.must_change_password, u.is_admin = auth.hash_password("Init#2026x"), True, True
+    db.merge(u)
+    db.commit()
+    c = TestClient(app)
+    state = start(c)
+    assert c.get(f"/?code=CODE&state={state}", follow_redirects=False).headers["location"] == "/"
+    assert c.get("/api/me").json()["must_change_password"] is False
+    assert c.get("/api/semesters").status_code == 200
+    # 同一账号用口令登录仍须先改初始口令
+    loc = TestClient(app)
+    assert loc.post("/api/auth/local-login", json={"staff_no": "20200089", "password": "Init#2026x"}).json()["must_change_password"]
+    assert loc.get("/api/semesters").status_code == 403

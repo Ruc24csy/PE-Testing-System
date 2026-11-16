@@ -34,7 +34,7 @@ def _secret() -> str:
 SECRET_KEY = _secret()
 
 # 登录方式：sso = 数字人大统一身份认证（学校 CAS 服务器上的 OAuth2.0 接口）；
-# local = 工号＋平台口令（统一认证接入前临时使用）；dev = 输入工号即可登录（仅限开发，禁止用于生产）
+# dev = 输入工号即可登录（仅限开发，禁止用于生产）。两种模式下都另有应急管理员本地口令登录。
 AUTH_MODE = os.getenv("PE_AUTH_MODE", "dev")
 if AUTH_MODE == "cas":  # 旧写法
     AUTH_MODE = "sso"
@@ -55,7 +55,9 @@ if AUTH_MODE == "sso":
                                ("PE_SSO_REDIRECT_URI", SSO_REDIRECT_URI)) if not v]
     if _missing:
         raise RuntimeError(f"PE_AUTH_MODE=sso 但缺少配置：{'、'.join(_missing)}")
-elif AUTH_MODE not in ("local", "dev"):
+elif AUTH_MODE == "local":
+    raise RuntimeError("已取消 PE_AUTH_MODE=local（教师口令登录），请改为 sso；统一认证不可用时用应急管理员登录")
+elif AUTH_MODE != "dev":
     raise RuntimeError(f"未知的 PE_AUTH_MODE：{AUTH_MODE}")
 
 # 体育部管理员工号，逗号分隔；也可在管理端“账号”里维护
