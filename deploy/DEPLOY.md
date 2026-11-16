@@ -138,7 +138,7 @@ sudo cp deploy/pe-scores-backup.cron /etc/cron.d/pe-scores-backup
 - 关掉用不到的 rpcbind（111 端口），见下面「服务器侧加固」。
 - SSH 关掉弱算法（见下面「SSH 加固」）。
 - `PE_AUTH_MODE=sso`，`PE_SSO_CLIENT_SECRET` 填好后脚本才会继续安装。教师只能用统一认证登录，本地口令只留给应急管理员。生产环境禁止使用 `dev`。
-- 数字人大账号、appid 的 secret 等凭据不写进代码仓库和文档，只写在 `/etc/pe-scores.env`。
+- 数智人大账号、appid 的 secret 等凭据不写进代码仓库和文档，只写在 `/etc/pe-scores.env`。
 - `PE_HTTPS_ONLY=1`。
 
 ## 7. SSH 加固

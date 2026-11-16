@@ -19,7 +19,7 @@ class Base(DeclarativeBase):
 
 
 class User(Base):
-    """登录过或被导入的教师/管理员。工号即数字人大账号。"""
+    """登录过或被导入的教师/管理员。工号即数智人大账号。"""
     __tablename__ = "users"
     staff_no: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[str] = mapped_column(String(64), default="")

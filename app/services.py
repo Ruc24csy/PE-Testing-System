@@ -434,7 +434,7 @@ def is_missing(r: dict) -> bool:
 
 
 def sort_rows(rows: list[dict], by: str) -> list[dict]:
-    """与录入页的排序选项一致（学号、姓名、行政班、总成绩、未录入在前），教师导出照网页顺序。"""
+    """与录入页的排序选项一致（学号、姓名、总成绩、未录入在前），教师导出照网页顺序。"""
     import re as _re
 
     def no_key(r):

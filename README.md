@@ -46,7 +46,7 @@ PE_ADMIN_STAFF_NOS=admin .venv/bin/uvicorn app.main:app --port 8000
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
-| `PE_AUTH_MODE` | `sso`＝数字人大统一身份认证；`dev`＝输入工号即登录，仅限开发。两种模式下应急管理员都可用本地口令登录 | `dev` |
+| `PE_AUTH_MODE` | `sso`＝数智人大统一身份认证；`dev`＝输入工号即登录，仅限开发。两种模式下应急管理员都可用本地口令登录 | `dev` |
 | `PE_SSO_CLIENT_ID` | 学校应用中心注册的 appid | 空 |
 | `PE_SSO_CLIENT_SECRET` | 与 appid 配套的 secret，只写在服务器配置里 | 空 |
 | `PE_SSO_REDIRECT_URI` | 回调地址，与应用中心登记的一字不差；登记根地址就填根地址 | 空 |
