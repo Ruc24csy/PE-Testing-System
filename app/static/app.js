@@ -187,7 +187,7 @@ function updateExcellence(C) {
   el.innerHTML = `<b>优秀率 ${(rate * 100).toFixed(1)}%</b>　优秀（总评≥89.5分）${ex} 人 / 全班 ${n} 人，已录完 ${done} 人${over ? "　<b>已超过30%，请注意控制优秀比例</b>" : ""}`;
 }
 /* 只有体测需要提交：班级状态“已提交”指体测已提交 */
-function statusText(s) { return s === "已提交" ? "体测已提交" : s; }
+function statusText(s) { return s === "已提交" ? "体测成绩已提交" : s; }
 function fmtPeriods(p) { const m = String(p || "").match(/\d{2}/g); return m ? `第${m.map(Number).join("-")}节` : p || ""; }
 
 /* ------------------------------------------------------------ 录入界面 */
@@ -274,7 +274,7 @@ function paintSaveState(C) {
 }
 function commitActive(C) { const s = segOf(document.activeElement); if (s) commitSeg(C, s); }
 function saveIdleText(C) { return C.savedAt ? `已保存 ${C.savedAt}` : "所有修改都已保存"; }
-function submitText(C) { return C.d.class.status === "已提交" ? "体测已提交（体测已锁定）" : "体测未提交"; }
+function submitText(C) { return C.d.class.status === "已提交" ? "体测成绩已提交（已锁定）" : "体测成绩未提交"; }
 function paintSubmitState(C) { const el = $("#saveState"); if (!el) return; el.lastElementChild.textContent = submitText(C); el.classList.toggle("done", C.d.class.status === "已提交"); }
 
 function renderClass(C) {
@@ -628,12 +628,12 @@ async function rowMenu(C, eid) {
   const stSel = (k) => { const f = `${k}_status`; return `<label>${esc(r.display[k].item_label || slots.find((s) => s.key === k).label)} <select data-st="${f}" ${ed && !peLock ? "" : "disabled"}>${C.d.statuses.map((s) => `<option value="${s}" ${r.values[f] === s ? "selected" : ""}>${s === "正常" ? "正常参加" : s}</option>`).join("")}</select></label>`; };
   const courseSel = `<label>课程成绩 <select data-st="course_status" ${ed ? "" : "disabled"}>${(C.d.course_statuses || ["正常"]).map((s) => `<option value="${s}" ${(r.course_status || "正常") === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>`;
   const showNote = ["作弊", "违纪"].includes(r.values.a_status) || ["作弊", "违纪"].includes(r.values.b_status) || !!r.values.note;
-  const lockInfo = peLock ? "体测已提交，性别和标准档不能再改" : "";
+  const lockInfo = peLock ? "体测成绩已提交，性别和标准档不能再改" : "";
   const pendingLine = st.pending ? `<div class="notice" style="margin:6px 0">这名学生的年级或性别待确认：${esc((st.reasons || []).join("；"))}。核对后在下面改好性别和标准档并保存，体测即可提交。</div>` : "";
   const hist = h.history || [];
   modal(`<h3>${esc(r.student_no)} ${esc(r.name)}</h3>
     <h4>特殊情况</h4><div class="row">${stSel("a")}${stSel("b")}${courseSel}</div>
-    <p class="muted small">体测：免测不计入成绩；缓测记为缺项；缺考、作弊、违纪记 0 分。课程成绩选缓考、缺考、退课时总成绩不算，显示状态，运动技能和平时成绩可以不填。${peLock ? "体测已提交，两项体测状态不能再改。" : ""}</p>
+    <p class="muted small">体测：免测不计入成绩；缓测记为缺项；缺考、作弊、违纪记 0 分。课程成绩选缓考、缺考、退课时总成绩不算，显示状态，运动技能和平时成绩可以不填。${peLock ? "体测成绩已提交，两项体测状态不能再改。" : ""}</p>
     <h4>学生信息</h4>${pendingLine}
     <div class="map-grid" style="max-width:none;grid-template-columns:70px 1fr 70px 1fr">
       <div>姓名</div><div><input type="text" id="siName" value="${esc(stu.name || r.name)}" ${ed ? "" : "disabled"}></div>
@@ -702,7 +702,7 @@ async function submitDialog(C) {
   });
 }
 function unlockDialog(C) {
-  modal(`<h3>申请撤回体测提交</h3><p>说明需要更正的原因，体育部审核通过后本班体测解锁，恢复为“录入中”。</p><textarea id="ulReason" rows="4" style="width:100%"></textarea>
+  modal(`<h3>申请撤回体测成绩提交</h3><p>说明需要更正的原因，体育部审核通过后本班体测解锁，恢复为“录入中”。</p><textarea id="ulReason" rows="4" style="width:100%"></textarea>
     <div class="row" style="margin-top:10px"><span class="spacer"></span><button class="primary" id="ulBtn">提交申请</button></div>`, (el) => {
     $("#ulBtn", el).onclick = async () => { try { await api(`/api/classes/${C.id}/unlock-request`, { method: "POST", body: { reason: $("#ulReason", el).value } }); closeModal(); toast("撤回申请已提交"); viewClass(C.id); } catch (e) { toast(e.message, true); } };
   });
@@ -765,14 +765,14 @@ async function adOverview(el) {
   const o = await api(`/api/admin/semesters/${sem.id}/overview`);
   el.innerHTML = `<h2>${esc(sem.name)}</h2>
    ${!o.classes ? `<div class="notice">本学期课程信息尚未导入。请到“课程信息导入”依次导入学生基础数据表、课程安排表、学生选课表。</div>` : ""}
-   <div class="kv"><div>教学班</div><div>${o.classes}（未开始 ${o.status["未开始"] || 0}／录入中 ${o.status["录入中"] || 0}／体测已提交 ${o.status["已提交"] || 0}）</div>
-   <div>体测已提交</div><div><b>${o.pe_submitted}</b> / ${o.classes} 个班</div>
+   <div class="kv"><div>教学班</div><div>${o.classes}（未开始 ${o.status["未开始"] || 0}／录入中 ${o.status["录入中"] || 0}／体测成绩已提交 ${o.status["已提交"] || 0}）</div>
+   <div>体测成绩已提交</div><div><b>${o.pe_submitted}</b> / ${o.classes} 个班</div>
    <div>有效选课记录</div><div>${o.enrollments}</div><div>待确认学生</div><div>${o.pending} <a href="#/admin/pending">去处理</a></div>
    <div>教师提交的其他问题</div><div>${o.info_errors ? `<b style="color:var(--err)">${o.info_errors}</b> 条待处理 <a href="#/admin/pending">去处理</a>` : 0}</div>
    <div>教师改过的学生信息</div><div>${o.teacher_edits} 次 ${o.teacher_edits ? '<a href="#/admin/pending">去抽查</a>' : ""}</div>
    <div>教师待补</div><div>${o.teacher_pending}</div><div>待审核撤回申请</div><div>${o.unlock_waiting} <a href="#/admin/unlock">去审核</a></div></div>
    <div class="row" style="margin-top:14px"><button class="primary" id="expPe">导出全校体测成绩表</button><button id="expAll">导出本学期全部成绩</button><a class="btn" href="#/">查看全部教学班</a></div>
-   ${o.class_list.length ? `<h3>各班体测提交情况</h3><div class="row"><label><input type="checkbox" id="ovOnly"> 只看未提交</label></div>
+   ${o.class_list.length ? `<h3>各班体测成绩提交情况</h3><div class="row"><label><input type="checkbox" id="ovOnly"> 只看未提交</label></div>
    <table class="list" style="margin-top:8px"><thead><tr><th>教学班号</th><th>课程</th><th>教学班</th><th>教师</th><th>体测</th></tr></thead><tbody id="ovBody"></tbody></table>` : ""}`;
   $("#expPe").onclick = () => download(`/api/admin/semesters/${sem.id}/export-pe`);
   $("#expAll").onclick = () => download(`/api/admin/semesters/${sem.id}/export`);
