@@ -91,6 +91,7 @@ class Student(Base):
     name: Mapped[str] = mapped_column(String(64), default="")
     gender: Mapped[str | None] = mapped_column(String(2))  # M / F / None
     college: Mapped[str] = mapped_column(String(64), default="")
+    # 以下三列已停用：学生基础数据表不再导入班级、年级、专业，代码不再读写；保留列只为兼容已有数据库
     class_name: Mapped[str] = mapped_column(String(128), default="")
     grade: Mapped[str] = mapped_column(String(16), default="")
     major: Mapped[str] = mapped_column(String(128), default="")

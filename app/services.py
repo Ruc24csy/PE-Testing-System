@@ -130,8 +130,7 @@ def build_row(seq, e: Enrollment, stu: Student | None, snap: StandardSnapshot | 
     row = {
         "enrollment_id": e.id, "seq": seq, "student_no": e.student_no, "name": shown["name"],
         "gender": {"M": "男", "F": "女"}.get(gender, "待确认"), "gender_code": gender,
-        "college": shown["college"], "major": e.major or (stu.major if stu else ""),
-        "class_label": e.class_label or (stu.class_name if stu else ""),
+        "college": shown["college"], "major": e.major, "class_label": e.class_label,
         "grade_num": snap.grade_num if snap else None,
         "band": band, "band_label": band_label(band, pending),
         "band_source": snap.source if snap else "", "pending": pending,
