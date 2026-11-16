@@ -190,7 +190,7 @@ function fmtPeriods(p) { const m = String(p || "").match(/\d{2}/g); return m ? `
 
 /* ------------------------------------------------------------ 录入界面 */
 const SAVE_EVERY = 60000;
-const SORTS = { no: "学号", name: "姓名", cls: "行政班", total: "总成绩（高→低）", missing: "未录入的在前" };
+const SORTS = { no: "学号", name: "姓名", total: "总成绩（高→低）", missing: "未录入的在前" };
 async function viewClass(id) {
   const d = await api(`/api/classes/${id}`);
   const C = { id: Number(id), d, rows: d.rows, byId: new Map(d.rows.map((r) => [r.enrollment_id, r])), queue: new Map(), undo: [], sel: new Set(), filter: "", errors: new Map(), savedAt: null };
@@ -353,7 +353,6 @@ function sortedRows(C) {
   const cmp = {
     no,
     name: (a, b) => String(a.name).localeCompare(String(b.name), "zh") || no(a, b),
-    cls: (a, b) => String(a.class_label || "").localeCompare(String(b.class_label || ""), "zh", { numeric: true }) || no(a, b),
     total: (a, b) => (b.total ?? -1) - (a.total ?? -1) || no(a, b),
     missing: (a, b) => Number(isMissing(b)) - Number(isMissing(a)) || no(a, b),
   }[by] || no;
