@@ -78,6 +78,7 @@ table.grid td.in.ro input{color:#999}
 .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px}
 .tabs a{padding:8px 14px;color:var(--text);border-bottom:2px solid transparent}.tabs a.on{border-color:var(--brand);color:var(--brand);font-weight:600}
 .report li{margin:4px 0}.report .lv-error{color:var(--err)}.report .lv-warn{color:#8a6100}.report .lv-info{color:#555}
+.pending-bad{color:var(--err);font-weight:600}.pending-bad select{border-color:var(--err);background:var(--errbg);color:var(--err);opacity:1}
 .map-grid{display:grid;grid-template-columns:140px 1fr;gap:6px 10px;align-items:center;max-width:560px}
 .status-bar{font-size:12px;color:var(--muted)}
 .kv{display:grid;grid-template-columns:120px 1fr;gap:4px 12px}
