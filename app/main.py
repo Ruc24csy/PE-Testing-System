@@ -158,7 +158,8 @@ def logout(request: Request, response: Response):
     # 只清浏览器缓存。不清 "storage"：录入页把没保存上的成绩暂存在 localStorage，下次登录自动补存；
     # 不清 "cookies"：它作用于整个注册域（ruc.edu.cn），会把同域其他系统也登出。会话 cookie 已由上一行作废。
     response.headers["Clear-Site-Data"] = '"cache"'
-    return {"ok": True, "redirect": config.SSO_LOGOUT_URL if config.AUTH_MODE == "sso" else "/"}
+    # 只退出本平台，不跳统一认证的登出页：老师用自己的电脑，不必连带退出数智人大
+    return {"ok": True, "redirect": "/"}
 
 
 @app.get("/api/me")

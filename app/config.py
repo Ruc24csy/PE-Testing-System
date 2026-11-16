@@ -42,7 +42,6 @@ SSO_BASE_URL = os.getenv("PE_SSO_BASE_URL", "https://cas.ruc.edu.cn/cas")
 SSO_AUTHORIZE_URL = os.getenv("PE_SSO_AUTHORIZE_URL") or f"{SSO_BASE_URL.rstrip('/')}/oauth2.0/authorize"
 SSO_TOKEN_URL = os.getenv("PE_SSO_TOKEN_URL") or f"{SSO_BASE_URL.rstrip('/')}/oauth2.0/accessToken"
 SSO_USER_INFO_URL = os.getenv("PE_SSO_USER_INFO_URL") or f"{SSO_BASE_URL.rstrip('/')}/oauth2.0/user/profiles"
-SSO_LOGOUT_URL = os.getenv("PE_SSO_LOGOUT_URL") or f"{SSO_BASE_URL.rstrip('/')}/logout"
 SSO_CLIENT_ID = os.getenv("PE_SSO_CLIENT_ID", "")  # 学校应用中心注册后获得的 appid
 SSO_CLIENT_SECRET = os.getenv("PE_SSO_CLIENT_SECRET", "")
 # 回调地址，必须与应用中心登记的一字不差（明文，不要预先 URL 编码），例如 https://域名/auth/sso/callback
