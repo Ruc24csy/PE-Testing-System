@@ -108,6 +108,7 @@ def sso_callback(request: Request, code: str = "", state: str = "", db: Session 
     auth.record_attempt(db, u.staff_no, ip, True)
     request.session.clear()
     request.session["staff_no"] = u.staff_no
+    request.session["login_method"] = "sso"
     services.log(db, u.staff_no, "登录", ip=ip, method="sso")
     db.commit()
     return RedirectResponse("/")
@@ -133,14 +134,15 @@ def local_login(request: Request, staff_no: str = Body(...), password: str = Bod
     if auth.locked(db, staff_no):
         raise HTTPException(429, f"连续登录失败次数过多，账号已锁定{config.LOGIN_LOCK_MINUTES}分钟")
     u = db.get(User, staff_no)
-    if u and config.AUTH_MODE == "sso" and not is_admin(u):
-        u = None  # 接入统一认证后，本地口令只留给应急管理员
+    if u and not is_admin(u):
+        u = None  # 本地口令只留给应急管理员，教师一律走统一认证
     if not u or not auth.verify_password(password, u.password_hash):
         auth.record_attempt(db, staff_no, ip, False)
         raise HTTPException(401, "工号或口令错误")
     auth.record_attempt(db, staff_no, ip, True)
     request.session.clear()
     request.session["staff_no"] = u.staff_no
+    request.session["login_method"] = "local"
     services.log(db, u.staff_no, "登录", ip=ip, method="local")
     db.commit()
     return {"ok": True, "must_change_password": u.must_change_password}
@@ -156,9 +158,9 @@ def logout(request: Request, response: Response):
 
 
 @app.get("/api/me")
-def me(u: User = Depends(current_user)):
+def me(request: Request, u: User = Depends(current_user)):
     return {"staff_no": u.staff_no, "name": u.name, "is_admin": is_admin(u),
-            "must_change_password": u.must_change_password, "auth_mode": config.AUTH_MODE}
+            "must_change_password": auth.must_change_password(request, u), "auth_mode": config.AUTH_MODE}
 
 
 @app.post("/api/me/password")
@@ -1087,48 +1089,8 @@ def semester_overview(sid: int, u: User = Depends(admin_user), db: Session = Dep
 
 @app.get("/api/admin/users")
 def list_users(u: User = Depends(admin_user), db: Session = Depends(get_db)):
-    return [{"staff_no": x.staff_no, "name": x.name, "is_admin": is_admin(x), "has_password": bool(x.password_hash),
-             "must_change_password": x.must_change_password}
+    return [{"staff_no": x.staff_no, "name": x.name, "is_admin": is_admin(x)}
             for x in db.scalars(select(User).order_by(User.staff_no))]
-
-
-@app.post("/api/admin/users/passwords")
-def issue_passwords(request: Request, body: dict = Body(...), u: User = Depends(admin_user),
-                    db: Session = Depends(get_db)):
-    """生成初始口令并导出为表格。给 staff_nos 时重置这些账号；否则为本学期全部任课教师中还没有口令的生成。"""
-    from openpyxl import Workbook
-    targets: list[User] = []
-    if body.get("staff_nos"):
-        for no in body["staff_nos"]:
-            no = str(no).strip()
-            if no:
-                targets.append(auth.ensure_user(db, no))
-    else:
-        sem = _sem(db, int(body["semester_id"]))
-        rows = db.execute(select(TeachingClass.staff_no, TeachingClass.teacher_name).where(
-            TeachingClass.semester_id == sem.id, TeachingClass.teacher_pending.is_(False))).all()
-        for no, name in sorted(set(rows)):
-            x = auth.ensure_user(db, no, name)
-            if not x.password_hash:
-                targets.append(x)
-    if not targets:
-        raise HTTPException(400, "没有需要生成口令的账号（已有口令的账号请单独重置）")
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "初始口令"
-    ws.append(["工号", "姓名", "初始口令", "说明"])
-    for x in targets:
-        pw = auth.gen_password()
-        x.password_hash, x.must_change_password = auth.hash_password(pw), True
-        ws.append([x.staff_no, x.name, pw, "首次登录须修改口令"])
-    for col, w in zip("ABCD", (14, 12, 16, 20)):
-        ws.column_dimensions[col].width = w
-    services.log(db, u.staff_no, "生成口令", f"{len(targets)} 个账号", ip=client_ip(request),
-                 staff_nos=[x.staff_no for x in targets])
-    db.commit()
-    buf = io.BytesIO()
-    wb.save(buf)
-    return _xlsx(buf.getvalue(), f"教师初始口令-{now():%Y%m%d%H%M}.xlsx")
 
 
 @app.post("/api/admin/users/{staff_no}")

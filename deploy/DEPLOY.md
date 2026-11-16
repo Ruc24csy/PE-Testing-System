@@ -7,13 +7,15 @@
 从堡垒机登录服务器后，以 root 执行：
 
 ```bash
-git clone <仓库地址> /root/pe-scores && cd /root/pe-scores
+git clone <仓库地址> /root/PE-Testing-System && cd /root/PE-Testing-System
 bash deploy/install.sh --domain <备案域名> --data-disk /dev/vdb --admin <工号>:<姓名>
 ```
 
+首次执行时脚本会生成配置 `/etc/pe-scores.env` 后停下，提示填写统一认证的 secret（`PE_SSO_CLIENT_SECRET`）；填好后再执行一次同样的命令。
+
 脚本会挂载数据盘、用 uv 装 Python 3.12（UOS V20 自带的 Python 版本过低）、装依赖、写配置、起 systemd 服务和 Nginx、配每日备份，并打印应急管理员的初始口令。
 
-下载走国内镜像：uv 和 Python 依赖用清华 PyPI 镜像，Python 本体和 Nginx 用南京大学镜像（清华没有这两个镜像），其余系统软件用 UOS 自带软件源。所有版本固定，清单见 [VERSIONS.md](VERSIONS.md)。可以重复执行；以后更新代码时 `git pull` 后再执行一次即可。服务器连不上代码仓库时，把代码压缩包传到服务器解压到 `/root/pe-scores`，再在里面执行同一条命令。
+下载走国内镜像：uv 和 Python 依赖用清华 PyPI 镜像，Python 本体和 Nginx 用南京大学镜像（清华没有这两个镜像），其余系统软件用 UOS 自带软件源。所有版本固定，清单见 [VERSIONS.md](VERSIONS.md)。可以重复执行；以后更新代码时 `git pull` 后再执行一次即可。服务器连不上代码仓库时，把代码压缩包传到服务器解压到 `/root/PE-Testing-System`，再在里面执行同一条命令。
 
 已经拿到正式证书的，执行前先放到 `/etc/nginx/certs/<备案域名>.crt` 和 `/etc/nginx/certs/<备案域名>.key`（证书文件要含中间证书），脚本就不再生成临时证书。
 
@@ -97,14 +99,14 @@ apt 系的 UOS 没有可用的 Nginx 官方源，只能装系统源的版本；�
 Nginx 配置和应用代码都有改动，重新执行一键脚本即可（去掉 `--data-disk` 和 `--admin`）：
 
 ```bash
-cd /root/pe-scores && git pull          # 连不上仓库时，把新代码包解压覆盖到这里
+cd /root/PE-Testing-System && git pull          # 连不上仓库时，把新代码包解压覆盖到这里
 sudo bash deploy/install.sh --domain <备案域名>
 ```
 
 只想单独更新 Nginx 配置时：
 
 ```bash
-cd /root/pe-scores
+cd /root/PE-Testing-System
 sudo cp /etc/nginx/conf.d/pe-scores.conf /root/pe-scores.conf.bak.$(date +%Y%m%d)
 sudo sed -e "s#pe.example.edu.cn#<备案域名>#g" deploy/nginx.conf | sudo tee /etc/nginx/conf.d/pe-scores.conf >/dev/null
 sudo nginx -t && sudo systemctl reload nginx     # -t 报错就把备份拷回去
@@ -130,12 +132,12 @@ sudo cp deploy/pe-scores-backup.cron /etc/cron.d/pe-scores-backup
 
 ## 6. 安全清单
 
-- 首次登录修改服务器初始管理口令（≥8位，三类字符）。
+- 应急管理员首次用口令登录时修改初始口令（≥8位，三类字符）。
 - 防火墙只对公网放通 80、443；SSH 10001 只允许堡垒机来源。
 - ICMP 时间戳（系统漏洞简报里唯一的低危项）用 iptables 屏蔽。不要为此去启动 firewalld，它的默认规则不放行 SSH 的 10001 端口。见下面「服务器侧加固」。
 - 关掉用不到的 rpcbind（111 端口），见下面「服务器侧加固」。
 - SSH 关掉弱算法（见下面「SSH 加固」）。
-- 统一认证启用前 `PE_AUTH_MODE=local`；填好 `PE_SSO_CLIENT_SECRET` 后改为 `sso`。生产环境禁止使用 `dev`。
+- `PE_AUTH_MODE=sso`，`PE_SSO_CLIENT_SECRET` 填好后脚本才会继续安装。教师只能用统一认证登录，本地口令只留给应急管理员。生产环境禁止使用 `dev`。
 - 数字人大账号、appid 的 secret 等凭据不写进代码仓库和文档，只写在 `/etc/pe-scores.env`。
 - `PE_HTTPS_ONLY=1`。
 

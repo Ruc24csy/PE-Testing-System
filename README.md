@@ -46,7 +46,7 @@ PE_ADMIN_STAFF_NOS=admin .venv/bin/uvicorn app.main:app --port 8000
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
-| `PE_AUTH_MODE` | `sso`＝数字人大统一身份认证；`local`＝工号＋平台口令（统一认证启用前使用，口令由体育部在“账号”页批量生成发放）；`dev`＝输入工号即登录，仅限开发 | `dev` |
+| `PE_AUTH_MODE` | `sso`＝数字人大统一身份认证；`dev`＝输入工号即登录，仅限开发。两种模式下应急管理员都可用本地口令登录 | `dev` |
 | `PE_SSO_CLIENT_ID` | 学校应用中心注册的 appid | 空 |
 | `PE_SSO_CLIENT_SECRET` | 与 appid 配套的 secret，只写在服务器配置里 | 空 |
 | `PE_SSO_REDIRECT_URI` | 回调地址，与应用中心登记的一字不差；登记根地址就填根地址 | 空 |
@@ -60,7 +60,7 @@ PE_ADMIN_STAFF_NOS=admin .venv/bin/uvicorn app.main:app --port 8000
 
 统一身份认证走学校 CAS 服务器上的 OAuth2.0 接口：`/auth/login` 跳转到 `oauth2.0/authorize`，回调（登记的地址，可以是站点根路径）用授权码换 `access_token`，再以查询参数调 `user/profiles` 取 `loginName`（工号）、`name`、`categoryName`。`state` 存在签名会话里、一次一用，防止伪造回调。
 
-统一认证接入前用 `local` 模式：体育部管理员在“体育部管理 → 账号”为本学期全部任课教师一键生成初始口令，下载表格分发；教师首次登录须修改。切换到 `sso` 后，本地口令只对管理员有效。
+教师只用统一认证登录，平台不给教师发口令。
 
 应急管理员（统一认证不可用时使用本地口令）：
 
@@ -68,7 +68,7 @@ PE_ADMIN_STAFF_NOS=admin .venv/bin/uvicorn app.main:app --port 8000
 .venv/bin/python scripts/manage.py create-admin <工号> <姓名>
 ```
 
-会打印随机初始口令，首次登录须修改（不少于8位，含数字、大写、小写、特殊字符中的至少三类）。本地口令连续失败 5 次锁定 15 分钟并记录来源 IP。
+会打印随机初始口令，用口令首次登录须修改（同一账号走统一认证登录不受影响）（不少于8位，含数字、大写、小写、特殊字符中的至少三类）。本地口令连续失败 5 次锁定 15 分钟并记录来源 IP。
 
 ## 部署到通州云平台服务器
 
