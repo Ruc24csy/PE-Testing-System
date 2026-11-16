@@ -371,6 +371,15 @@ def test_logout_clears_cache_only():
     assert c.get("/api/me").status_code == 401
 
 
+def test_logout_stays_on_platform_in_sso_mode(monkeypatch):
+    # 统一认证模式下也只退出本平台，不跳数智人大的登出页
+    from app import config
+    monkeypatch.setattr(config, "AUTH_MODE", "sso")
+    r = TestClient(app).post("/auth/logout")
+    assert r.status_code == 200
+    assert r.json()["redirect"] == "/"
+
+
 def test_create_semester_validation(admin, teacher):
     assert teacher.post("/api/admin/semesters", json={"start_year": 2027, "season": "fall"}).status_code == 403
     r = admin.post("/api/admin/semesters", json={"start_year": 2027, "season": "spring"})

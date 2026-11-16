@@ -89,7 +89,7 @@ async function loadSemesters() {
 function renderTop() {
   const me = state.me;
   $("#userBox").innerHTML = me ? `<span>${esc(me.name || "")} ${esc(me.staff_no)}${me.is_admin ? " · 体育部" : ""}</span><button id="logoutBtn">退出</button>` : "";
-  if (me) $("#logoutBtn").onclick = async () => { const r = await api("/auth/logout", { method: "POST" }); state.me = null; state.semesters = []; location.href = r.redirect === "/" ? "/#/login" : r.redirect; };
+  if (me) $("#logoutBtn").onclick = async () => { await api("/auth/logout", { method: "POST" }); state.me = null; state.semesters = []; location.href = "/#/login"; };
   const h = location.hash;
   $("#nav").innerHTML = me ? `<a href="#/" class="${!h.startsWith("#/admin") ? "on" : ""}">我的教学班</a>` + (me.is_admin ? `<a href="#/admin" class="${h.startsWith("#/admin") ? "on" : ""}">体育部管理</a>` : "") : "";
   const sp = $("#semPicker");
