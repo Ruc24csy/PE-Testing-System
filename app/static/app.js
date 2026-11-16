@@ -106,8 +106,8 @@ async function viewLogin() {
   const em = location.hash.match(/error=(\w+)/);
   const err = em && errs[em[1]] ? `<div class="notice err">${errs[em[1]]}</div>` : "";
   $("#app").innerHTML = `<div class="login"><div class="card"><div class="login-brand"><img src="/static/logo.svg" alt=""><div>体育成绩录入平台<div class="muted small">中国人民大学体育部</div></div></div><h2>登录</h2>${err}
-    ${mode.mode === "sso" ? `<p>使用数字人大统一身份认证（职工号与密码）登录。</p><a class="btn primary" href="/auth/login">统一身份认证登录</a>` : ""}
-    ${mode.mode === "dev" ? `<div class="notice info">当前为开发测试模式：输入工号即可登录。正式部署时改为数字人大统一身份认证。</div>
+    ${mode.mode === "sso" ? `<p>使用数智人大统一身份认证登录。</p><a class="btn primary" href="/auth/login">统一身份认证登录</a>` : ""}
+    ${mode.mode === "dev" ? `<div class="notice info">当前为开发测试模式：输入工号即可登录。正式部署时改为数智人大统一身份认证。</div>
        <label>工号<input type="text" id="devNo" lang="en" inputmode="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus></label><button class="primary" id="devBtn">登录</button>` : ""}
     <details style="margin-top:18px"><summary class="muted small">应急管理员登录</summary>
       <label>工号<input type="text" id="locNo" lang="en" inputmode="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false"></label><label>口令<input type="password" id="locPw"></label>
@@ -310,14 +310,30 @@ function renderClass(C) {
   <div class="grid-wrap"><table class="grid" id="grid">
     <thead><tr>
       <th rowspan="2" class="sticky">序号</th>
-      <th rowspan="2" class="sticky2">学号</th><th rowspan="2" class="sticky3">姓名</th><th rowspan="2">性别</th><th rowspan="2" class="opt">学院</th><th rowspan="2" class="opt">行政班</th><th rowspan="2" class="opt">年级/标准档</th>
+      <th rowspan="2" class="sticky2">学号</th><th rowspan="2">性别</th><th rowspan="2" class="opt">学院</th><th rowspan="2" class="opt">年级/标准档</th>
+      <th rowspan="2">姓名</th><th rowspan="2">总成绩</th>
       ${["a", "b"].map((k) => `<th colspan="2">${esc(itemName(k))}<span class="qm" data-std="${k}" title="查看评分表与加分规则">?</span></th>`).join("")}
-      <th rowspan="2">体测小计</th><th rowspan="2">运动技能</th><th rowspan="2">平时成绩</th><th rowspan="2">总成绩</th><th rowspan="2"></th>
+      <th rowspan="2">体测小计</th><th rowspan="2">姓名</th><th rowspan="2">运动技能</th><th rowspan="2">平时成绩</th><th rowspan="2"></th>
     </tr><tr>${["a", "b"].map(() => `<th>成绩</th><th>得分</th>`).join("")}</tr></thead>
     <tbody></tbody></table></div>`;
   paintSubmitState(C); paintSaveState(C);
   renderRows(C);
   bindClass(C);
+  stickGrid();
+}
+// 固定列和表头第二行的位置按实际尺寸算：学号列紧贴序号列右边，「成绩/得分」行紧贴第一行下边。
+// 列宽、行高随字体、缩放、数据变化，用 ResizeObserver 跟着重算，不写死像素。
+function stickGrid() {
+  const grid = $("#grid"); if (!grid) return;
+  const first = $("thead th.sticky", grid); const head1 = $("thead tr", grid);
+  const apply = () => {
+    if (!grid.isConnected) { ro.disconnect(); return; }
+    grid.style.setProperty("--stick2-left", `${first.getBoundingClientRect().width}px`);
+    grid.style.setProperty("--head2-top", `${head1.getBoundingClientRect().height}px`);
+  };
+  const ro = new ResizeObserver(apply);
+  ro.observe(first); ro.observe(head1);
+  apply();
 }
 
 function isMissing(r) {
@@ -378,12 +394,12 @@ function rowHtml(C, r, no) {
   if (r.sudden.length) flags.push(`<span class="tag warn" title="${esc(r.sudden.join("；"))}">突变</span>`);
   return `<tr data-e="${r.enrollment_id}" data-no="${no}" class="${r.pending || !r.gender_code ? "pending" : ""}">
     <td class="sticky lock num">${no}</td>
-    <td class="sticky2 lock">${esc(r.student_no)}</td><td class="sticky3 lock">${esc(r.name)} ${flags.join(" ")}</td><td class="lock">${esc(r.gender)}</td>
-    <td class="lock trunc opt" title="${esc(r.college)}">${esc(r.college)}</td><td class="lock trunc opt" title="${esc(r.class_label)}">${esc(r.class_label)}</td>
+    <td class="sticky2 lock">${esc(r.student_no)}</td><td class="lock">${esc(r.gender)}</td>
+    <td class="lock trunc opt" title="${esc(r.college)}">${esc(r.college)}</td>
     <td class="lock opt">${r.grade_num ? `大${r.grade_num}` : ""} ${esc(r.band_label)}</td>
+    <td class="lock">${esc(r.name)} ${flags.join(" ")}</td><td class="lock num"><b>${fmt(r.total, 1)}</b></td>
     ${cell("a_raw")}${scoreCell("a")}${cell("b_raw")}${scoreCell("b")}
-    <td class="lock num"><b>${fmt(r.subtotal, 2)}</b></td>${cell("skill")}${cell("regular")}
-    <td class="lock num"><b>${fmt(r.total, 1)}</b></td>
+    <td class="lock num"><b>${fmt(r.subtotal, 2)}</b></td><td class="lock">${esc(r.name)}</td>${cell("skill")}${cell("regular")}
     <td class="lock"><button class="link rowMenu" data-e="${r.enrollment_id}">更多</button></td></tr>`;
 }
 
@@ -940,7 +956,7 @@ async function adLogs(el, page = 1) {
 async function adUsers(el) {
   const us = await api("/api/admin/users");
   el.innerHTML = `<h3>账号</h3>
-    <p class="muted small">教师用数字人大统一身份认证登录，首次登录后出现在这里。</p>
+    <p class="muted small">教师用数智人大统一身份认证登录，首次登录后出现在这里。</p>
     <div class="row"><input type="text" id="uNo" placeholder="工号"><button id="uAdd">设为管理员</button></div>
     <table class="list" style="margin-top:10px"><tr><th>工号</th><th>姓名</th><th>角色</th><th></th></tr>${us.map((u) => `<tr><td>${esc(u.staff_no)}</td><td>${esc(u.name)}</td><td>${u.is_admin ? "体育部管理员" : "教师"}</td>
       <td>${u.is_admin ? `<button class="link" data-rm="${esc(u.staff_no)}">取消管理员</button>` : `<button class="link" data-add="${esc(u.staff_no)}">设为管理员</button>`}</td></tr>`).join("")}</table>`;

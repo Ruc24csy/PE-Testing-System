@@ -1,4 +1,4 @@
-"""登录：数字人大统一身份认证（CAS 协议）+ 开发测试登录 + 应急本地管理员口令。"""
+"""登录：数智人大统一身份认证（CAS 协议）+ 开发测试登录 + 应急本地管理员口令。"""
 from __future__ import annotations
 
 import hashlib

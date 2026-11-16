@@ -33,7 +33,7 @@ def _secret() -> str:
 
 SECRET_KEY = _secret()
 
-# 登录方式：sso = 数字人大统一身份认证（学校 CAS 服务器上的 OAuth2.0 接口）；
+# 登录方式：sso = 数智人大统一身份认证（学校 CAS 服务器上的 OAuth2.0 接口）；
 # dev = 输入工号即可登录（仅限开发，禁止用于生产）。两种模式下都另有应急管理员本地口令登录。
 AUTH_MODE = os.getenv("PE_AUTH_MODE", "dev")
 if AUTH_MODE == "cas":  # 旧写法
