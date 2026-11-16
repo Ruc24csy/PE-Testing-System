@@ -27,6 +27,8 @@ class User(Base):
     # 本地口令仅用于应急管理员账号（统一认证不可用时）；首次登录须修改
     password_hash: Mapped[str | None] = mapped_column(String(256))
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 体育部公共账号：管理员新建，用工号＋本地口令登录；不是管理员，只能看指派给它的教学班
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -114,7 +116,10 @@ class Enrollment(Base):
     course_category: Mapped[str] = mapped_column(String(32), default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True)  # 一人多条选课时，体育部可停用多余记录
     seq: Mapped[int] = mapped_column(Integer, default=0)
-    info_error: Mapped[str | None] = mapped_column(String(256))  # 教师标记“信息有误”的说明
+    info_error: Mapped[str | None] = mapped_column(String(256))  # 教师提交的“其他问题”
+    info_error_resolved: Mapped[bool] = mapped_column(Boolean, default=False)  # 体育部已处理
+    info_error_resolved_by: Mapped[str | None] = mapped_column(String(32))
+    info_error_resolved_at: Mapped[datetime | None] = mapped_column(DateTime)
     # 管理员手动添加、修改、调班或移除过：之后覆盖导入选课表时不改动这条（不改字段、不删除、不恢复）
     manual: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -132,6 +137,8 @@ class GradeCorrection(Base):
     effective_semester: Mapped[str] = mapped_column(String(16), default="")  # 生效学年学期代码
     note: Mapped[str] = mapped_column(Text, default="")
     operator: Mapped[str] = mapped_column(String(32), default="")
+    # 教师在录入页认定的标准档只对生效的那个学期有效，下学期仍按系统推算
+    this_semester_only: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -164,6 +171,7 @@ class ScoreRecord(Base):
     skill: Mapped[float | None] = mapped_column(Float)
     regular: Mapped[float | None] = mapped_column(Float)
     note: Mapped[str] = mapped_column(String(256), default="")  # 作弊/违纪原因等
+    course_status: Mapped[str] = mapped_column(String(8), default="正常")  # 课程成绩特殊情况：正常/缓考/缺考/退课
     computed: Mapped[dict] = mapped_column(JSON, default=dict)
     standard_version: Mapped[str] = mapped_column(String(16), default="GB2014")
     updated_by: Mapped[str] = mapped_column(String(32), default="")
@@ -259,4 +267,6 @@ def _add_missing_columns():
                 if isinstance(default, bool):
                     sql += f" NOT NULL DEFAULT {'1' if default else '0'}" if engine.dialect.name == "sqlite" \
                         else f" NOT NULL DEFAULT {'true' if default else 'false'}"
+                elif isinstance(default, str) and "'" not in default:
+                    sql += f" DEFAULT '{default}'"
                 conn.execute(text(sql))

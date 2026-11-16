@@ -109,7 +109,7 @@ async function viewLogin() {
     ${mode.mode === "sso" ? `<p>使用数字人大统一身份认证（职工号与密码）登录。</p><a class="btn primary" href="/auth/login">统一身份认证登录</a>` : ""}
     ${mode.mode === "dev" ? `<div class="notice info">当前为开发测试模式：输入工号即可登录。正式部署时改为数字人大统一身份认证。</div>
        <label>工号<input type="text" id="devNo" lang="en" inputmode="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus></label><button class="primary" id="devBtn">登录</button>` : ""}
-    <details style="margin-top:18px"><summary class="muted small">应急管理员登录</summary>
+    <details style="margin-top:18px"><summary class="muted small">体育部公共账号 / 应急管理员登录</summary>
       <label>工号<input type="text" id="locNo" lang="en" inputmode="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false"></label><label>口令<input type="password" id="locPw"></label>
       <button id="locBtn">登录</button></details></div></div>`;
   const done = async () => { state.me = null; state.semesters = []; location.hash = "#/"; };
@@ -128,7 +128,7 @@ async function viewLogin() {
 }
 function viewPassword() {
   $("#app").innerHTML = `<div class="login"><div class="card"><h2>修改口令</h2>
-   <p class="muted small">应急管理员的初始口令须在首次登录时修改。新口令不少于8位，并包含数字、大写字母、小写字母、特殊字符中的至少三类。</p>
+   <p class="muted small">公共账号和应急管理员的初始口令须在首次登录时修改。新口令不少于8位，并包含数字、大写字母、小写字母、特殊字符中的至少三类。</p>
    <label>原口令<input type="password" id="pw0"></label><label>新口令<input type="password" id="pw1"></label><label>再输一次<input type="password" id="pw2"></label>
    <button class="primary" id="pwBtn">保存</button></div></div>`;
   $("#pwBtn").onclick = async () => {
@@ -157,7 +157,7 @@ async function viewHome(scope) {
     ${d.classes.map((c) => `<tr class="clickable" data-id="${c.id}"><td>${esc(c.course_name)}</td><td><a href="#/class/${c.id}">${esc(c.class_name)}</a>${c.pending ? ` <span class="tag warn" title="有学生的年级或性别待体育部确认">待确认 ${c.pending}</span>` : ""}</td>
       <td>${esc(c.weekday)} ${esc(fmtPeriods(c.periods))}<div class="muted small">${esc(c.weeks)}</div></td><td>${esc(c.location)}</td><td>${esc(c.campus)}</td><td>${c.roster}</td>
       ${all ? `<td>${esc(c.teacher_name)}${c.teacher_pending ? ' <span class="tag err">教师待补</span>' : ""}</td>` : ""}
-      <td>${c.entered}/${c.roster}</td><td>${excellentCell(c.excellent, c.roster)}</td><td><span class="tag s-${c.status}">${c.status}</span></td></tr>`).join("")}</tbody></table>`;
+      <td>${c.entered}/${c.roster}</td><td>${excellentCell(c.excellent, c.roster)}</td><td><span class="tag s-${c.status}">${statusText(c.status)}</span></td></tr>`).join("")}</tbody></table>`;
   $("#app").innerHTML = `<div class="card"><div class="row"><h2 style="margin:0">${esc(sem.name)} ${sem.is_current ? '<span class="tag cur">本学期</span>' : ""}</h2>
     <span class="spacer"></span>
     <select id="fCourse"><option value="">全部课程</option>${d.courses.map((c) => `<option ${c === filt.course ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
@@ -186,6 +186,8 @@ function updateExcellence(C) {
   el.className = "notice " + (over ? "err" : "info");
   el.innerHTML = `<b>优秀率 ${(rate * 100).toFixed(1)}%</b>　优秀（总评≥89.5分）${ex} 人 / 全班 ${n} 人，已录完 ${done} 人${over ? "　<b>已超过30%，请注意控制优秀比例</b>" : ""}`;
 }
+/* 只有体测需要提交：班级状态“已提交”指体测已提交 */
+function statusText(s) { return s === "已提交" ? "体测已提交" : s; }
 function fmtPeriods(p) { const m = String(p || "").match(/\d{2}/g); return m ? `第${m.map(Number).join("-")}节` : p || ""; }
 
 /* ------------------------------------------------------------ 录入界面 */
@@ -272,7 +274,7 @@ function paintSaveState(C) {
 }
 function commitActive(C) { const s = segOf(document.activeElement); if (s) commitSeg(C, s); }
 function saveIdleText(C) { return C.savedAt ? `已保存 ${C.savedAt}` : "所有修改都已保存"; }
-function submitText(C) { return C.d.class.status === "已提交" ? "已提交（已锁定）" : "未提交"; }
+function submitText(C) { return C.d.class.status === "已提交" ? "体测已提交（体测已锁定）" : "体测未提交"; }
 function paintSubmitState(C) { const el = $("#saveState"); if (!el) return; el.lastElementChild.textContent = submitText(C); el.classList.toggle("done", C.d.class.status === "已提交"); }
 
 function renderClass(C) {
@@ -294,7 +296,7 @@ function renderClass(C) {
       </div></details></div>
     ${!d.editable ? `<div class="notice info" style="margin-top:10px">${esc(d.readonly_reason)}${d.unlock_request && d.unlock_request.status === "待审核" ? "（撤回申请审核中）" : ""}</div>` : ""}
     <div id="exRate" class="notice info" style="margin-top:10px"></div>
-    ${pendingN ? `<div class="notice" style="margin-top:10px">本班有 ${pendingN} 名学生的年级或性别待体育部确认（黄色行），确认前按暂定标准档计算，班级不能提交。</div>` : ""}
+    ${pendingN ? `<div class="notice" style="margin-top:10px">本班有 ${pendingN} 名学生的年级或性别待确认（黄色行），确认前按暂定标准档计算，体测不能提交。核对后可在该生的“更多”里直接改性别或标准档。</div>` : ""}
     <div class="toolbar">
       <label>排序 <select id="sortBy">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}" ${k === sortBy ? "selected" : ""}>${v}</option>`).join("")}</select></label>
       <label><input type="checkbox" id="fMissing"> 只看未录入</label>
@@ -302,10 +304,11 @@ function renderClass(C) {
       <span class="spacer"></span>
       <button id="exportBtn">导出 Excel</button>
       ${d.editable ? `<button id="tplBtn">下载录入模板</button><button id="uploadBtn">用模板整班上传</button>` : ""}
-      ${d.editable ? `<button id="saveBtn" title="平时会自动保存，这里可以立即保存一次">保存</button><button class="primary" id="submitBtn" title="提交后成绩锁定，交给体育部">提交成绩</button>` : ""}
+      ${d.editable ? `<button id="saveBtn" title="平时会自动保存，这里可以立即保存一次">保存</button>` : ""}
+      ${d.editable && !d.pe_locked ? `<button class="primary" id="submitBtn" title="提交后两项体测成绩锁定，交给体育部；运动技能、平时成绩仍可修改">提交体测成绩</button>` : ""}
       ${c.status === "已提交" && (!d.unlock_request || d.unlock_request.status !== "待审核") ? `<button id="unlockBtn">申请撤回</button>` : ""}
     </div>
-    <div class="muted small">填完一格按回车，先到右边一格，一行填完再到下一位学生；↑↓ 上下换格。耐力跑填完“分”会自动跳到“秒”。修改会自动保存，确认无误后再点“提交成绩”。免测、缺考等特殊情况点每行的“更多”。</div>
+    <div class="muted small">填完一格按回车，先到右边一格，一行填完再到下一位学生；↑↓ 上下换格。耐力跑填完“分”会自动跳到“秒”。修改会自动保存。只有体测需要提交，体测录完后点“提交体测成绩”。免测、缺考、缓考、退课等特殊情况和学生信息修改点每行的“更多”。</div>
   </div>
   <div class="grid-wrap"><table class="grid" id="grid">
     <thead><tr>
@@ -322,12 +325,13 @@ function renderClass(C) {
 
 function isMissing(r) {
   const v = r.values; const miss = (k) => v[`${k}_status`] === "正常" && v[`${k}_raw`] === null;
+  if (r.course_status && r.course_status !== "正常") return miss("a") || miss("b");
   return miss("a") || miss("b") || v.skill === null || v.regular === null;
 }
 function rowVisible(C, r) {
   if ($("#fMissing") && $("#fMissing").checked && !isMissing(r)) return false;
   if ($("#fIssue") && $("#fIssue").checked) {
-    if (!(r.pending || !r.gender_code || r.issues.length || r.sudden.length || r.info_error || [...C.errors.keys()].some((k) => k.startsWith(r.enrollment_id + ":")))) return false;
+    if (!(r.pending || !r.gender_code || r.issues.length || r.sudden.length || (r.info_error && !r.info_error_resolved) || [...C.errors.keys()].some((k) => k.startsWith(r.enrollment_id + ":")))) return false;
   }
   return true;
 }
@@ -357,7 +361,7 @@ function rowHtml(C, r, no) {
     if (slot && v[`${k}_status`] !== "正常") {
       return `<td class="in ro"><div class="seg st-only" data-e="${r.enrollment_id}" data-f="${field}"><button class="link stTag" data-e="${r.enrollment_id}" title="点击修改特殊情况">${esc(v[`${k}_status`])}</button></div></td>`;
     }
-    const ro = !ed || (slot && !r.gender_code);
+    const ro = !ed || (slot && (!r.gender_code || C.d.pe_locked));
     const pend = C.queue.get(key);
     const val = pend ? pend.value : slot ? slot.raw_text : v[field] ?? "";
     const sp = segSpec(C, slot ? slot.item : null, field); const parts = sp.split(val);
@@ -374,7 +378,7 @@ function rowHtml(C, r, no) {
   const flags = [];
   if (r.pending) flags.push(`<span class="tag warn" title="${esc(r.pending_reasons.join("；"))}">待确认</span>`);
   if (r.flags.includes("band_changed")) flags.push(`<span class="tag warn" title="体育部已变更该生标准档">档已变更</span>`);
-  if (r.info_error) flags.push(`<span class="tag err" title="${esc(r.info_error)}">信息有误</span>`);
+  if (r.info_error && !r.info_error_resolved) flags.push(`<span class="tag err" title="${esc(r.info_error)}">其他问题</span>`);
   if (r.sudden.length) flags.push(`<span class="tag warn" title="${esc(r.sudden.join("；"))}">突变</span>`);
   return `<tr data-e="${r.enrollment_id}" data-no="${no}" class="${r.pending || !r.gender_code ? "pending" : ""}">
     <td class="sticky lock num">${no}</td>
@@ -383,7 +387,7 @@ function rowHtml(C, r, no) {
     <td class="lock opt">${r.grade_num ? `大${r.grade_num}` : ""} ${esc(r.band_label)}</td>
     ${cell("a_raw")}${scoreCell("a")}${cell("b_raw")}${scoreCell("b")}
     <td class="lock num"><b>${fmt(r.subtotal, 2)}</b></td>${cell("skill")}${cell("regular")}
-    <td class="lock num"><b>${fmt(r.total, 1)}</b></td>
+    <td class="lock num"><b>${r.course_status && r.course_status !== "正常" ? esc(r.course_status) : fmt(r.total, 1)}</b></td>
     <td class="lock"><button class="link rowMenu" data-e="${r.enrollment_id}">更多</button></td></tr>`;
 }
 
@@ -563,7 +567,7 @@ function bindClass(C) {
   $("#fMissing").onchange = () => renderRows(C); $("#fIssue").onchange = () => renderRows(C);
   const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
   on("#saveBtn", async () => { commitActive(C); C.nextSave = Date.now() + SAVE_EVERY; await flushQueue(C); if (!C.queue.size && !C.errors.size) toast("已保存（还没有提交）"); });
-  on("#exportBtn", async () => { commitActive(C); await flushQueue(C); download(`/api/classes/${C.id}/export`); });
+  on("#exportBtn", async () => { commitActive(C); await flushQueue(C); download(`/api/classes/${C.id}/export?sort=${encodeURIComponent(($("#sortBy") && $("#sortBy").value) || "no")}`); });
   on("#tplBtn", () => download(`/api/classes/${C.id}/template`));
   on("#uploadBtn", () => uploadDialog(C));
   on("#submitBtn", () => submitDialog(C));
@@ -596,32 +600,72 @@ async function showStandard(C, k) {
 }
 function secToTxt(v) { const m = Math.floor(v / 60); const s = +(v - m * 60).toFixed(1); return `${m}'${String(s).padStart(2, "0")}"`; }
 
+/* 「更多」弹窗，从上到下：特殊情况｜学生信息｜其他问题｜备注（按需）｜修改记录（收起） */
 async function rowMenu(C, eid) {
   const r = C.byId.get(eid);
   const h = await api(`/api/classes/${C.id}/history/${eid}`);
-  const st = h.standard;
-  const fieldName = { a_raw: "项目一原始成绩", a_status: "项目一状态", b_raw: "项目二原始成绩", b_status: "项目二状态", skill: "运动技能评定", regular: "平时成绩", note: "备注" };
+  const st = h.standard || {};
+  const stu = h.student || {};
+  const issue = h.issue || {};
+  const fieldName = { a_raw: "项目一原始成绩", a_status: "项目一状态", b_raw: "项目二原始成绩", b_status: "项目二状态", skill: "运动技能评定", regular: "平时成绩", note: "备注", course_status: "课程成绩特殊情况" };
   const slots = C.d.config.slots;
-  const stSel = (k) => { const f = `${k}_status`; return `<label>${esc(r.display[k].item_label || slots.find((s) => s.key === k).label)} <select data-st="${f}" ${C.d.editable ? "" : "disabled"}>${C.d.statuses.map((s) => `<option value="${s}" ${r.values[f] === s ? "selected" : ""}>${s === "正常" ? "正常参加" : s}</option>`).join("")}</select></label>`; };
+  const ed = C.d.editable, peLock = C.d.pe_locked;
+  const stSel = (k) => { const f = `${k}_status`; return `<label>${esc(r.display[k].item_label || slots.find((s) => s.key === k).label)} <select data-st="${f}" ${ed && !peLock ? "" : "disabled"}>${C.d.statuses.map((s) => `<option value="${s}" ${r.values[f] === s ? "selected" : ""}>${s === "正常" ? "正常参加" : s}</option>`).join("")}</select></label>`; };
+  const courseSel = `<label>课程成绩 <select data-st="course_status" ${ed ? "" : "disabled"}>${(C.d.course_statuses || ["正常"]).map((s) => `<option value="${s}" ${(r.course_status || "正常") === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>`;
+  const showNote = ["作弊", "违纪"].includes(r.values.a_status) || ["作弊", "违纪"].includes(r.values.b_status) || !!r.values.note;
+  const lockInfo = peLock ? "体测已提交，性别和标准档不能再改" : "";
+  const pendingLine = st.pending ? `<div class="notice" style="margin:6px 0">这名学生的年级或性别待确认：${esc((st.reasons || []).join("；"))}。核对后在下面改好性别和标准档并保存，体测即可提交。</div>` : "";
+  const hist = h.history || [];
   modal(`<h3>${esc(r.student_no)} ${esc(r.name)}</h3>
-    <h4>特殊情况</h4><div class="row">${stSel("a")}${stSel("b")}</div>
-    <p class="muted small">免测不计入成绩；缓测记为缺项；缺考、作弊、违纪记 0 分，作弊或违纪请在下方备注里写明原因。</p>
-    <h4>标准档判定依据</h4>${st ? `<div class="kv"><div>标准档</div><div>${st.grade_num ? `大${st.grade_num}，` : ""}${esc(st.band_label)}${st.pending ? " <span class='tag warn'>待确认</span>" : ""}</div>
-      <div>判定来源</div><div>${esc(st.source || "—")}</div><div>来源字段</div><div>${esc(Object.entries(st.detail || {}).map(([k, v]) => `${k}：${typeof v === "object" && v ? JSON.stringify(v) : v ?? "—"}`).join("；"))}</div>
-      ${st.reasons.length ? `<div>待确认原因</div><div>${esc(st.reasons.join("；"))}</div>` : ""}<div>认定</div><div>${esc(st.decided_by)} ${esc(st.decided_at)}</div></div>` : "<p class='muted'>暂无</p>"}
-    <h4>信息有误</h4><div class="row"><input type="text" id="ieNote" style="flex:1" placeholder="例如：性别应为女；实际为2024级" value="${esc(r.info_error || "")}"><button id="ieBtn">${r.info_error ? "更新" : "标记"}</button>${r.info_error ? '<button id="ieClr">取消标记</button>' : ""}</div>
-    <p class="muted small">性别、年级、标准档不在表格内修改，由体育部统一更正。</p>
-    ${C.d.editable ? `<h4>备注</h4><div class="row"><input type="text" id="noteIn" style="flex:1" placeholder="作弊或违纪时请写明原因，会导出到成绩单备注" value="${esc(r.values.note || "")}"><button id="noteBtn">保存备注</button></div>` : ""}
-    <h4>修改记录</h4>${h.history.length ? `<table class="list small"><tr><th>时间</th><th>字段</th><th>原值</th><th>新值</th><th>换算</th><th>版本</th><th>操作人</th></tr>
-      ${h.history.map((x) => `<tr><td>${esc(x.at)}</td><td>${esc(fieldName[x.field] || x.field)}</td><td>${esc(x.old ?? "")}</td><td>${esc(x.new ?? "")}</td>
+    <h4>特殊情况</h4><div class="row">${stSel("a")}${stSel("b")}${courseSel}</div>
+    <p class="muted small">体测：免测不计入成绩；缓测记为缺项；缺考、作弊、违纪记 0 分。课程成绩选缓考、缺考、退课时总成绩不算，显示状态，运动技能和平时成绩可以不填。${peLock ? "体测已提交，两项体测状态不能再改。" : ""}</p>
+    <h4>学生信息</h4>${pendingLine}
+    <div class="map-grid" style="max-width:none;grid-template-columns:70px 1fr 70px 1fr">
+      <div>姓名</div><div><input type="text" id="siName" value="${esc(stu.name || r.name)}" ${ed ? "" : "disabled"}></div>
+      <div>性别</div><div><select id="siGender" ${ed && !peLock ? "" : "disabled"}><option value="">待确认</option><option value="M" ${stu.gender === "M" ? "selected" : ""}>男</option><option value="F" ${stu.gender === "F" ? "selected" : ""}>女</option></select></div>
+      <div>学院</div><div><input type="text" id="siCollege" value="${esc(stu.college || r.college || "")}" ${ed ? "" : "disabled"}></div>
+      <div>标准档</div><div><select id="siBand" ${ed && !peLock ? "" : "disabled"}>${st.band ? "" : '<option value="">待确认</option>'}<option value="12" ${st.band === "12" ? "selected" : ""}>大一大二</option><option value="34" ${st.band === "34" ? "selected" : ""}>大三大四</option></select></div></div>
+    ${ed ? `<div class="row" style="margin-top:6px"><span class="muted small">保存即生效。姓名、性别、学院是全校共用的学生信息，别的班也会跟着变；改性别或标准档会立即重算体测得分。${lockInfo}</span><span class="spacer"></span><button id="siSave">保存学生信息</button></div>` : ""}
+    <h4>其他问题</h4>
+    ${issue.note ? `<p class="small">已提交：${esc(issue.note)} <span class="tag ${issue.resolved ? "s-已提交" : "warn"}">${issue.resolved ? `体育部已处理${issue.resolved_at ? " " + esc(issue.resolved_at) : ""}` : "待体育部处理"}</span></p>` : ""}
+    <div class="row"><textarea id="ieNote" rows="2" style="flex:1" placeholder="上面改不了的问题写在这里，提交给体育部处理">${esc(issue.resolved ? "" : issue.note || "")}</textarea></div>
+    <div class="row" style="margin-top:6px"><span class="spacer"></span>${issue.note && !issue.resolved ? '<button id="ieClr">撤回问题</button>' : ""}<button id="ieBtn">${issue.note && !issue.resolved ? "更新问题" : "提交给体育部"}</button></div>
+    ${showNote ? `<h4>备注</h4><div class="row"><input type="text" id="noteIn" style="flex:1" placeholder="作弊或违纪时请写明原因，会导出到成绩单备注" value="${esc(r.values.note || "")}" ${ed ? "" : "disabled"}>${ed ? '<button id="noteBtn">保存备注</button>' : ""}</div>` : ""}
+    ${hist.length ? `<details style="margin-top:12px"><summary><b>修改记录（${hist.length} 条）</b></summary><table class="list small"><tr><th>时间</th><th>字段</th><th>原值</th><th>新值</th><th>换算</th><th>版本</th><th>操作人</th></tr>
+      ${hist.map((x) => `<tr><td>${esc(x.at)}</td><td>${esc(fieldName[x.field] || x.field)}</td><td>${esc(x.old ?? "")}</td><td>${esc(x.new ?? "")}</td>
       <td>${x.computed && x.computed.slot && x.computed.slot.score !== null ? `${x.computed.slot.level ?? ""}分档→${x.computed.slot.score}分→折算${x.computed.slot.folded}` : esc((x.computed && x.computed.reason) || "")}${x.computed && x.computed.total !== undefined && x.computed.total !== null ? `；总${x.computed.total}` : ""}</td>
-      <td>${esc(x.version)}</td><td>${esc(x.operator)}</td></tr>`).join("")}</table>` : "<p class='muted'>暂无</p>"}`, (el) => {
-    const mark = async (note) => { try { await api(`/api/classes/${C.id}/info-error`, { method: "POST", body: { enrollment_id: eid, note } }); r.info_error = note || null; refreshRows(C, new Set([eid])); closeModal(); toast(note ? "已标记，体育部会统一核对更正" : "已取消标记"); } catch (e) { toast(e.message, true); } };
-    $("#ieBtn", el).onclick = () => { const v = $("#ieNote", el).value.trim(); if (!v) return toast("请写明哪里有误", true); mark(v); };
+      <td>${esc(x.version)}</td><td>${esc(x.operator)}</td></tr>`).join("")}</table></details>` : ""}`, (el) => {
+    const mark = async (note) => { try { await api(`/api/classes/${C.id}/info-error`, { method: "POST", body: { enrollment_id: eid, note } }); r.info_error = note || null; r.info_error_resolved = false; refreshRows(C, new Set([eid])); closeModal(); toast(note ? "已提交给体育部" : "已撤回"); } catch (e) { toast(e.message, true); } };
+    $("#ieBtn", el).onclick = () => { const v = $("#ieNote", el).value.trim(); if (!v) return toast("请写明是什么问题", true); mark(v); };
     if ($("#ieClr", el)) $("#ieClr", el).onclick = () => mark("");
-    $$("[data-st]", el).forEach((x) => (x.onchange = () => { enqueue(C, eid, x.dataset.st, x.value); flushQueue(C); toast(`已设为“${x.value === "正常" ? "正常参加" : x.value}”`); }));
+    $$("[data-st]", el).forEach((x) => (x.onchange = () => { enqueue(C, eid, x.dataset.st, x.value); flushQueue(C); toast(`已设为“${x.value === "正常" ? (x.dataset.st === "course_status" ? "正常" : "正常参加") : x.value}”`); }));
     if ($("#noteBtn", el)) $("#noteBtn", el).onclick = () => { enqueue(C, eid, "note", $("#noteIn", el).value.trim()); closeModal(); };
+    if ($("#siSave", el)) $("#siSave", el).onclick = async () => {
+      const body = { name: $("#siName", el).value.trim(), college: $("#siCollege", el).value.trim() };
+      if (!peLock) { if ($("#siGender", el).value) body.gender = $("#siGender", el).value; if ($("#siBand", el).value) body.band = $("#siBand", el).value; }
+      if (!body.name) return toast("姓名不能为空", true);
+      try {
+        commitActive(C); await flushQueue(C);
+        const res = await api(`/api/classes/${C.id}/students/${eid}`, { method: "POST", body });
+        closeModal();
+        if (!res.changed.length) return toast("没有改动");
+        await reloadClass(C); toast("已保存，得分已重算");
+      } catch (e) { toast(e.message, true); }
+    };
   });
+}
+/* 改了学生信息或标准档后重新取一遍本班数据，保住滚动位置 */
+async function reloadClass(C) {
+  const wrap = $(".grid-wrap"); const pos = wrap ? [wrap.scrollLeft, window.scrollY] : null;
+  const keep = { m: $("#fMissing") && $("#fMissing").checked, i: $("#fIssue") && $("#fIssue").checked };
+  const d = await api(`/api/classes/${C.id}`);
+  if (state.cls !== C) return;
+  C.d = d; C.rows = d.rows; C.byId = new Map(d.rows.map((r) => [r.enrollment_id, r]));
+  renderClass(C);
+  if ($("#fMissing")) $("#fMissing").checked = !!keep.m;
+  if ($("#fIssue")) $("#fIssue").checked = !!keep.i;
+  if (keep.m || keep.i) renderRows(C);
+  if (pos) { const w = $(".grid-wrap"); if (w) w.scrollLeft = pos[0]; window.scrollTo(0, pos[1]); }
 }
 
 async function submitDialog(C) {
@@ -630,20 +674,20 @@ async function submitDialog(C) {
   await flushQueue(C);
   const ck = await api(`/api/classes/${C.id}/check`);
   const sec = (title, list, tip) => `<h4>${title}（${list.length}）</h4>${list.length ? `<ul>${list.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : `<p class="muted small">无</p>`}${tip && list.length ? `<p class="small muted">${tip}</p>` : ""}`;
-  modal(`<h3>提交前校验</h3><div class="checklist">
-    ${sec("未录入项", ck.missing, "未录入的单元格不会按0分处理。")}
-    ${sec("年级待确认项", ck.pending, "这些学生须由体育部确认后才能提交。")}
+  modal(`<h3>提交体测成绩前校验</h3><div class="checklist">
+    ${sec("体测未录入项", ck.missing, "每名学生的两项体测都要填成绩或标特殊情况（免测、缓测、缺考等）才能提交。")}
+    ${sec("年级/性别待确认项", ck.pending, "核对后可在该生的“更多”里直接修改，或等体育部确认。")}
     ${sec("加分超限项", ck.bonus)}
     ${sec("成绩突变项（与上学期同项目偏差超过25%）", ck.sudden)}</div>
-    <p>提交后本班成绩锁定，如需更正须提交撤回申请，由体育部审核解锁。</p>
+    <p>提交后本班两项体测的成绩和特殊状态锁定，如需更正须提交撤回申请，由体育部审核解锁。运动技能、平时成绩、备注和课程成绩特殊情况提交后仍可修改。</p>
     <div class="row"><span class="spacer"></span><button id="cancelSub">返回修改</button><button class="primary" id="doSub" ${ck.blocking ? "disabled" : ""}>确认提交</button></div>
-    ${ck.blocking ? `<div class="notice err" style="margin-top:10px">本班存在年级或性别待确认的学生，暂不能提交。</div>` : ""}`, (el) => {
+    ${ck.blocking ? `<div class="notice err" style="margin-top:10px">${ck.pending.length ? "本班存在年级或性别待确认的学生" : "本班还有体测没录完的学生"}，暂不能提交。</div>` : ""}`, (el) => {
     $("#cancelSub", el).onclick = closeModal;
-    $("#doSub", el).onclick = async () => { try { await api(`/api/classes/${C.id}/submit`, { method: "POST" }); closeModal(); toast("已提交"); viewClass(C.id); } catch (e) { toast(e.message, true); } };
+    $("#doSub", el).onclick = async () => { try { await api(`/api/classes/${C.id}/submit`, { method: "POST" }); closeModal(); toast("体测成绩已提交"); viewClass(C.id); } catch (e) { toast(e.message, true); } };
   });
 }
 function unlockDialog(C) {
-  modal(`<h3>申请撤回</h3><p>说明需要更正的原因，体育部审核通过后本班恢复为“录入中”。</p><textarea id="ulReason" rows="4" style="width:100%"></textarea>
+  modal(`<h3>申请撤回体测提交</h3><p>说明需要更正的原因，体育部审核通过后本班体测解锁，恢复为“录入中”。</p><textarea id="ulReason" rows="4" style="width:100%"></textarea>
     <div class="row" style="margin-top:10px"><span class="spacer"></span><button class="primary" id="ulBtn">提交申请</button></div>`, (el) => {
     $("#ulBtn", el).onclick = async () => { try { await api(`/api/classes/${C.id}/unlock-request`, { method: "POST", body: { reason: $("#ulReason", el).value } }); closeModal(); toast("撤回申请已提交"); viewClass(C.id); } catch (e) { toast(e.message, true); } };
   });
@@ -706,12 +750,31 @@ async function adOverview(el) {
   const o = await api(`/api/admin/semesters/${sem.id}/overview`);
   el.innerHTML = `<h2>${esc(sem.name)}</h2>
    ${!o.classes ? `<div class="notice">本学期课程信息尚未导入。请到“课程信息导入”依次导入学生基础数据表、课程安排表、学生选课表。</div>` : ""}
-   <div class="kv"><div>教学班</div><div>${o.classes}（未开始 ${o.status["未开始"] || 0}／录入中 ${o.status["录入中"] || 0}／已提交 ${o.status["已提交"] || 0}）</div>
+   <div class="kv"><div>教学班</div><div>${o.classes}（未开始 ${o.status["未开始"] || 0}／录入中 ${o.status["录入中"] || 0}／体测已提交 ${o.status["已提交"] || 0}）</div>
+   <div>体测已提交</div><div><b>${o.pe_submitted}</b> / ${o.classes} 个班</div>
    <div>有效选课记录</div><div>${o.enrollments}</div><div>待确认学生</div><div>${o.pending} <a href="#/admin/pending">去处理</a></div>
-   <div>教师标记信息有误</div><div>${o.info_errors ? `<b style="color:var(--err)">${o.info_errors}</b> <a href="#/admin/pending">去处理</a>` : 0}</div>
+   <div>教师提交的其他问题</div><div>${o.info_errors ? `<b style="color:var(--err)">${o.info_errors}</b> 条待处理 <a href="#/admin/pending">去处理</a>` : 0}</div>
+   <div>教师改过的学生信息</div><div>${o.teacher_edits} 次 ${o.teacher_edits ? '<a href="#/admin/pending">去抽查</a>' : ""}</div>
    <div>教师待补</div><div>${o.teacher_pending}</div><div>待审核撤回申请</div><div>${o.unlock_waiting} <a href="#/admin/unlock">去审核</a></div></div>
-   <div class="row" style="margin-top:14px"><button class="primary" id="expAll">导出本学期全部成绩</button><a class="btn" href="#/">查看全部教学班</a></div>`;
+   <div class="row" style="margin-top:14px"><button class="primary" id="expPe">导出全校体测成绩表</button><button id="expAll">导出本学期全部成绩</button><a class="btn" href="#/">查看全部教学班</a></div>
+   ${o.class_list.length ? `<h3>各班体测提交情况</h3><div class="row"><label><input type="checkbox" id="ovOnly"> 只看未提交</label></div>
+   <table class="list" style="margin-top:8px"><thead><tr><th>教学班号</th><th>课程</th><th>教学班</th><th>教师</th><th>体测</th></tr></thead><tbody id="ovBody"></tbody></table>` : ""}`;
+  $("#expPe").onclick = () => download(`/api/admin/semesters/${sem.id}/export-pe`);
   $("#expAll").onclick = () => download(`/api/admin/semesters/${sem.id}/export`);
+  const drawOv = () => {
+    const only = $("#ovOnly") && $("#ovOnly").checked;
+    $("#ovBody").innerHTML = o.class_list.filter((c) => !only || !c.submitted).map((c) => `<tr><td>${esc(c.class_no)}</td><td>${esc(c.course_name)}</td><td><a href="#/class/${c.id}">${esc(c.class_name)}</a></td><td>${esc(c.teacher_name || "教师待补")} <button class="link" data-assign="${c.id}" title="把这个班指派给某位教师或公共账号">指定教师</button></td>
+      <td>${c.submitted ? `<span class="tag s-已提交">已提交</span> <span class="muted small">${esc(c.submitted_at || "")}</span>` : '<span class="tag">未提交</span>'}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">都已提交</td></tr>`;
+  };
+  if ($("#ovBody")) {
+    drawOv(); $("#ovOnly").onchange = drawOv;
+    $("#ovBody").onclick = async (e) => {
+      const b = e.target.closest("[data-assign]"); if (!b) return;
+      const no = prompt("指定给哪个工号？（教师工号或公共账号的工号）"); if (!no || !no.trim()) return;
+      const name = prompt("教师姓名（可留空）") ?? "";
+      try { await api(`/api/admin/classes/${b.dataset.assign}`, { method: "PATCH", body: { staff_no: no.trim(), teacher_name: name.trim() } }); toast("已指定"); adOverview(el); } catch (err) { toast(err.message, true); }
+    };
+  }
   sessionStorage.setItem("classFilter", JSON.stringify({ scope: "all" }));
 }
 async function adSemesters(el) {
@@ -806,9 +869,12 @@ function impMapping(info, sem) {
 async function adPending(el) {
   const sem = curSem(); if (!sem) return;
   const d = await api(`/api/admin/semesters/${sem.id}/pending`);
-  el.innerHTML = `<div class="${d.info_errors.length ? "notice err" : "notice info"}" style="margin-bottom:16px">
-    <h3 style="margin-top:0">教师标记“信息有误”${d.info_errors.length ? `：<b>${d.info_errors.length}</b> 条待处理` : "：暂无"}</h3>
-    ${d.info_errors.length ? `<table class="list"><tr><th>学号</th><th>姓名</th><th>教学班</th><th>教师</th><th>说明</th><th></th></tr>${d.info_errors.map((x) => `<tr><td>${esc(x.student_no)}</td><td>${esc(x.name)}</td><td>${esc(x.class_name)}</td><td>${esc(x.teacher)}</td><td>${esc(x.note)}</td><td><button class="link" data-edit2="${esc(x.student_no)}">去修改</button></td></tr>`).join("")}</table>` : `<p class="muted small" style="margin:0">教师在录入页标记的学生信息问题会出现在这里。</p>`}</div>
+  const openIssues = d.info_errors.filter((x) => !x.resolved);
+  el.innerHTML = `<div class="${openIssues.length ? "notice err" : "notice info"}" style="margin-bottom:16px">
+    <h3 style="margin-top:0">教师提交的其他问题${openIssues.length ? `：<b>${openIssues.length}</b> 条待处理` : "：暂无待处理"}</h3>
+    ${d.info_errors.length ? `<table class="list"><tr><th>学号</th><th>姓名</th><th>教学班</th><th>教师</th><th>问题</th><th>状态</th><th></th></tr>${d.info_errors.map((x) => `<tr style="${x.resolved ? "opacity:.6" : ""}"><td>${esc(x.student_no)}</td><td>${esc(x.name)}</td><td>${esc(x.class_name)}</td><td>${esc(x.teacher)}</td><td>${esc(x.note)}</td><td>${x.resolved ? "已处理" : "待处理"}</td><td class="nw"><button class="link" data-edit2="${esc(x.student_no)}">去修改</button> <button class="link" data-resolve="${x.enrollment_id}" data-v="${x.resolved ? 0 : 1}">${x.resolved ? "改回待处理" : "标记已处理"}</button></td></tr>`).join("")}</table>` : `<p class="muted small" style="margin:0">教师在录入页“更多”里提交的问题会出现在这里，处理后教师那边显示“已处理”。</p>`}</div>
+    <details style="margin-bottom:16px" ${d.teacher_edits.length ? "" : "hidden"}><summary><b>教师改过的学生信息（${d.teacher_edits.length} 次）</b> <span class="muted small">教师在录入页直接改的姓名、性别、学院、标准档，供抽查</span></summary>
+      <table class="list small" style="margin-top:8px"><tr><th>时间</th><th>教师</th><th>学号</th><th>姓名</th><th>教学班</th><th>改动</th><th></th></tr>${d.teacher_edits.map((x) => `<tr><td class="nw">${esc(x.at)}</td><td>${esc(x.teacher)}</td><td>${esc(x.student_no)}</td><td>${esc(x.name)}</td><td>${esc(x.class_name)}</td><td>${x.changes.map((c) => `<div>${esc(c)}</div>`).join("")}</td><td><button class="link" data-edit2="${esc(x.student_no)}">查看</button></td></tr>`).join("")}</table></details>
     <p>${esc(sem.name)} 共 <b>${d.students.length}</b> 名学生待确认：${Object.entries(d.summary).map(([k, v]) => `${esc(k)} ${v}`).join("，") || "无"}</p>
     <div class="row"><input type="text" id="pSearch" placeholder="按学号、姓名或原因筛选" size="30"></div>
     <table class="list" style="margin-top:10px"><thead><tr><th>学号</th><th>姓名</th><th>性别</th><th>暂定标准档</th><th>原因</th><th>选课记录</th><th>操作</th></tr></thead><tbody id="pBody"></tbody></table>
@@ -827,6 +893,7 @@ async function adPending(el) {
   };
   $("#pSearch").oninput = draw; draw();
   $$("[data-edit2]", el).forEach((b) => (b.onclick = () => studentEditor(sem, b.dataset.edit2, () => adPending(el))));
+  $$("[data-resolve]", el).forEach((b) => (b.onclick = async () => { try { await api(`/api/admin/enrollments/${b.dataset.resolve}/issue-resolved`, { method: "POST", body: { resolved: b.dataset.v === "1" } }); adPending(el); } catch (e) { toast(e.message, true); } }));
   $$("[data-tset]", el).forEach((b) => (b.onclick = async () => { try { await api(`/api/admin/classes/${b.dataset.tset}`, { method: "PATCH", body: { staff_no: $(`[data-tno="${b.dataset.tset}"]`).value, teacher_name: $(`[data-tname="${b.dataset.tset}"]`).value } }); toast("已指定"); adPending(el); } catch (e) { toast(e.message, true); } }));
 }
 async function adStudents(el) {
@@ -850,7 +917,7 @@ async function studentEditor(sem, no, done) {
   const classOpts = (sel) => d.classes.map((c) => `<option value="${c.id}" ${c.id === sel ? "selected" : ""}>${esc(c.label)}</option>`).join("");
   const enrollRow = (e) => `<div class="card" style="padding:10px;margin:8px 0;${e.active ? "" : "opacity:.6"}" data-eid="${e.enrollment_id}">
       <div class="row"><b>${esc(e.course_name)} · ${esc(e.class_name)}</b><span class="muted small">${esc(e.teacher || "教师待补")} · ${esc(e.class_status)}</span>
-        ${e.active ? "" : '<span class="tag err">已移出</span>'}${e.manual ? '<span class="tag">手动维护</span>' : ""}${e.info_error ? `<span class="tag err" title="${esc(e.info_error)}">教师标记信息有误：${esc(e.info_error)}</span>` : ""}</div>
+        ${e.active ? "" : '<span class="tag err">已移出</span>'}${e.manual ? '<span class="tag">手动维护</span>' : ""}${e.info_error && !e.info_error_resolved ? `<span class="tag err" title="${esc(e.info_error)}">教师提了问题：${esc(e.info_error)}</span>` : ""}</div>
       ${e.active ? `<div class="map-grid" style="margin-top:8px;max-width:none;grid-template-columns:90px 1fr 90px 1fr">
         <div>教学班</div><div style="grid-column:span 3"><select data-k="class_id" style="max-width:100%">${classOpts(e.class_id)}</select></div>
         <div>姓名</div><div><input type="text" data-k="name" value="${esc(e.name)}"></div><div>上课班级</div><div><input type="text" data-k="class_label" value="${esc(e.class_label)}"></div>
@@ -928,7 +995,7 @@ async function adLogs(el, page = 1) {
   const qs = new URLSearchParams({ action, page });
   if (onlySem) qs.set("semester_id", sem.id);
   const d = await api(`/api/admin/logs?${qs}`);
-  el.innerHTML = `<div class="row"><select id="lgScope"><option value="">全部学期</option>${sem ? `<option value="sem" ${onlySem ? "selected" : ""}>${esc(sem.name)}（含登录等通用记录）</option>` : ""}</select><select id="lgAct"><option value="">全部操作</option>${["保存", "提交", "撤回申请", "撤回审核", "改档", "导入", "导出", "配置", "回退导入", "指定教师", "学期设置", "登录"].map((a) => `<option ${a === action ? "selected" : ""}>${a}</option>`).join("")}</select><span class="muted">共 ${d.total} 条</span>
+  el.innerHTML = `<div class="row"><select id="lgScope"><option value="">全部学期</option>${sem ? `<option value="sem" ${onlySem ? "selected" : ""}>${esc(sem.name)}（含登录等通用记录）</option>` : ""}</select><select id="lgAct"><option value="">全部操作</option>${["保存", "提交", "撤回申请", "撤回审核", "改档", "教师修改学生信息", "提交其他问题", "处理其他问题", "导入", "导出", "配置", "回退导入", "指定教师", "学期设置", "公共账号", "登录"].map((a) => `<option ${a === action ? "selected" : ""}>${a}</option>`).join("")}</select><span class="muted">共 ${d.total} 条</span>
     <span class="spacer"></span>${page > 1 ? '<button id="lgPrev">上一页</button>' : ""}${d.total > page * 100 ? '<button id="lgNext">下一页</button>' : ""}</div>
     <table class="list small" style="margin-top:10px"><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>详情</th><th>IP</th></tr>
     ${d.logs.map((l) => `<tr><td>${esc(l.at)}</td><td>${esc(l.actor_name)} ${esc(l.actor)}</td><td>${esc(l.action)}</td><td>${esc(l.target)}</td><td style="max-width:520px;word-break:break-all">${esc(JSON.stringify(l.detail)).slice(0, 400)}</td><td>${esc(l.ip)}</td></tr>`).join("")}</table>`;
@@ -939,12 +1006,29 @@ async function adLogs(el, page = 1) {
 }
 async function adUsers(el) {
   const us = await api("/api/admin/users");
-  el.innerHTML = `<h3>账号</h3>
-    <p class="muted small">教师用数字人大统一身份认证登录，首次登录后出现在这里。</p>
+  const pubs = us.filter((u) => u.is_public), others = us.filter((u) => !u.is_public);
+  el.innerHTML = `<h3>体育部公共账号</h3>
+    <p class="muted small">给没有数智人大身份的老师用：用登录页的工号＋口令登录，不是管理员，只能看、录被“指定教师”指派给它的教学班。可以建多个。多人共用一个账号时，操作日志只记到这个账号。</p>
+    <div class="row"><input type="text" id="pName" placeholder="账号名称，如 体育部公共"><input type="text" id="pNo" placeholder="工号，如 tyb01" lang="en" autocapitalize="off" spellcheck="false"><button class="primary" id="pAdd">新建公共账号</button></div>
+    ${pubs.length ? `<table class="list" style="margin-top:10px"><tr><th>工号</th><th>名称</th><th>口令</th><th></th></tr>${pubs.map((u) => `<tr><td>${esc(u.staff_no)}</td><td>${esc(u.name)}</td><td>${u.must_change_password ? '<span class="tag warn">初始口令，未改</span>' : "已设置"}</td>
+      <td><button class="link" data-reset="${esc(u.staff_no)}">重置口令</button></td></tr>`).join("")}</table>` : `<p class="muted small">还没有公共账号。</p>`}
+    <h3>账号</h3>
+    <p class="muted small">教师用数智人大统一身份认证登录，首次登录后出现在这里。</p>
     <div class="row"><input type="text" id="uNo" placeholder="工号"><button id="uAdd">设为管理员</button></div>
-    <table class="list" style="margin-top:10px"><tr><th>工号</th><th>姓名</th><th>角色</th><th></th></tr>${us.map((u) => `<tr><td>${esc(u.staff_no)}</td><td>${esc(u.name)}</td><td>${u.is_admin ? "体育部管理员" : "教师"}</td>
+    <table class="list" style="margin-top:10px"><tr><th>工号</th><th>姓名</th><th>角色</th><th></th></tr>${others.map((u) => `<tr><td>${esc(u.staff_no)}</td><td>${esc(u.name)}</td><td>${u.is_admin ? "体育部管理员" : "教师"}</td>
       <td>${u.is_admin ? `<button class="link" data-rm="${esc(u.staff_no)}">取消管理员</button>` : `<button class="link" data-add="${esc(u.staff_no)}">设为管理员</button>`}</td></tr>`).join("")}</table>`;
   const set = async (no, v) => { try { await api(`/api/admin/users/${encodeURIComponent(no)}`, { method: "POST", body: { is_admin: v } }); adUsers(el); } catch (e) { toast(e.message, true); } };
+  const showPw = (r, title) => modal(`<h3>${esc(title)}</h3><div class="kv"><div>工号</div><div>${esc(r.staff_no)}</div><div>初始口令</div><div><b style="font-family:monospace;font-size:18px">${esc(r.password)}</b></div></div>
+    <p class="small">口令只显示这一次，请抄下交给使用的老师。首次登录时须修改口令。</p>`);
+  $("#pAdd").onclick = async () => {
+    try { const r = await api("/api/admin/public-accounts", { method: "POST", body: { name: $("#pName").value, staff_no: $("#pNo").value } }); await adUsers(el); showPw(r, `已新建公共账号：${r.name}`); }
+    catch (e) { toast(e.message, true); }
+  };
+  $$("[data-reset]", el).forEach((b) => (b.onclick = async () => {
+    if (!confirm(`重置 ${b.dataset.reset} 的口令？原口令立即失效。`)) return;
+    try { const r = await api(`/api/admin/public-accounts/${encodeURIComponent(b.dataset.reset)}/reset`, { method: "POST" }); await adUsers(el); showPw(r, "口令已重置"); }
+    catch (e) { toast(e.message, true); }
+  }));
   $("#uAdd").onclick = () => set($("#uNo").value.trim(), true);
   $$("[data-rm]", el).forEach((b) => (b.onclick = () => set(b.dataset.rm, false)));
   $$("[data-add]", el).forEach((b) => (b.onclick = () => set(b.dataset.add, true)));

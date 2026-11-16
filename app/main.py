@@ -100,6 +100,10 @@ def sso_callback(request: Request, code: str = "", state: str = "", db: Session 
     except Exception:
         return RedirectResponse("/#/login?error=unavailable")
     u = db.get(User, ident["staff_no"])
+    if u and u.is_public:
+        # 公共账号的工号由管理员自定，统一认证里同号的人不能借此登录
+        auth.record_attempt(db, ident["staff_no"], ip, False)
+        return RedirectResponse("/#/login?error=category")
     if not (u and is_admin(u)) and ident["staff_no"] not in config.ADMIN_STAFF_NOS \
             and ident["category"] not in config.SSO_ALLOWED_CATEGORIES:
         auth.record_attempt(db, ident["staff_no"], ip, False)
@@ -129,13 +133,13 @@ def dev_login(request: Request, staff_no: str = Body(..., embed=True), db: Sessi
 
 @app.post("/api/auth/local-login")
 def local_login(request: Request, staff_no: str = Body(...), password: str = Body(...), db: Session = Depends(get_db)):
-    """应急管理员本地口令登录（统一认证不可用时）。连续失败5次锁定15分钟。"""
+    """本地口令登录：应急管理员（统一认证不可用时）和体育部公共账号。连续失败5次锁定15分钟。"""
     ip = client_ip(request)
     if auth.locked(db, staff_no):
         raise HTTPException(429, f"连续登录失败次数过多，账号已锁定{config.LOGIN_LOCK_MINUTES}分钟")
     u = db.get(User, staff_no)
-    if u and not is_admin(u):
-        u = None  # 本地口令只留给应急管理员，教师一律走统一认证
+    if u and not (is_admin(u) or u.is_public):
+        u = None  # 本地口令只留给应急管理员和公共账号，教师一律走统一认证
     if not u or not auth.verify_password(password, u.password_hash):
         auth.record_attempt(db, staff_no, ip, False)
         raise HTTPException(401, "工号或口令错误")
@@ -159,7 +163,7 @@ def logout(request: Request, response: Response):
 
 @app.get("/api/me")
 def me(request: Request, u: User = Depends(current_user)):
-    return {"staff_no": u.staff_no, "name": u.name, "is_admin": is_admin(u),
+    return {"staff_no": u.staff_no, "name": u.name, "is_admin": is_admin(u), "is_public": bool(u.is_public),
             "must_change_password": auth.must_change_password(request, u), "auth_mode": config.AUTH_MODE}
 
 
@@ -334,12 +338,16 @@ def get_class(cid: int, u: User = Depends(current_user), db: Session = Depends(g
     rows = services.load_class_rows(db, c, sem)
     cfg = services.class_config(c, sem)
     editable, why = services.can_edit(c, sem)
+    locked = services.pe_locked(c)
+    if editable and locked:
+        why = "本班体测成绩已提交并锁定，如需更正请申请撤回；运动技能、平时成绩、备注和课程成绩特殊情况仍可修改"
     unlock = db.scalars(select(UnlockRequest).where(UnlockRequest.class_id == c.id)
                         .order_by(UnlockRequest.id.desc())).first()
     return {"semester": sem_dict(sem), "class": class_brief(c), "config": cfg,
             "config_labels": {s["key"]: {g: scoring.item_label(it) for g, it in s["items"].items()} for s in cfg["slots"]},
-            "editable": editable, "readonly_reason": why, "rows": rows,
-            "statuses": scoring.STATUSES, "standard_version": sem.standard_version,
+            "editable": editable, "pe_locked": locked, "readonly_reason": why, "rows": rows,
+            "statuses": scoring.STATUSES, "course_statuses": scoring.COURSE_STATUSES,
+            "standard_version": sem.standard_version,
             "unlock_request": None if not unlock else {"status": unlock.status, "reason": unlock.reason,
                                                        "review_note": unlock.review_note}}
 
@@ -380,6 +388,8 @@ def update_class_config(cid: int, request: Request, cfg: dict = Body(..., embed=
     ok, why = services.can_edit(c, sem)
     if not ok:
         raise HTTPException(403, why)
+    if services.pe_locked(c):
+        raise HTTPException(403, services.PE_LOCKED_MSG)
     new = _validate_config(cfg)
     old = services.class_config(c, sem)
     # 已有原始成绩的项目不允许改成另一个项目（会让原始值失去意义），只能改权重
@@ -401,14 +411,94 @@ def update_class_config(cid: int, request: Request, cfg: dict = Body(..., embed=
 @app.post("/api/classes/{cid}/info-error")
 def mark_info_error(cid: int, enrollment_id: int = Body(...), note: str = Body(""),
                     u: User = Depends(current_user), db: Session = Depends(get_db)):
+    """教师提交“其他问题”（文字），体育部在待确认清单里处理；清空即撤回。"""
     c, sem = _class(db, cid, u)
     e = db.get(Enrollment, enrollment_id)
     if not e or e.class_id != c.id:
         raise HTTPException(404, "学生不在本班")
     e.info_error = note.strip()[:256] or None
-    services.log(db, u.staff_no, "标记信息有误", f"{e.student_no} {e.name}", sem.id, note=note)
+    e.info_error_resolved, e.info_error_resolved_by, e.info_error_resolved_at = False, None, None
+    services.log(db, u.staff_no, "提交其他问题", f"{e.student_no} {e.name}", sem.id, note=note)
     db.commit()
     return {"ok": True}
+
+
+@app.post("/api/classes/{cid}/students/{eid}")
+def teacher_edit_student(cid: int, eid: int, request: Request, body: dict = Body(...),
+                         u: User = Depends(current_user), db: Session = Depends(get_db)):
+    """教师在“更多”里直接改学生姓名、性别、学院和标准档，保存即生效、立即重算。
+
+    学生基础数据跨学期共用：改后标为手动修改，之后导入基础数据表不覆盖。
+    标准档写成只对本学期生效的认定记录（第一优先），待确认的学生由教师定档后不再阻断提交。
+    """
+    c, sem = _class(db, cid, u)
+    ok, why = services.can_edit(c, sem)
+    if not ok:
+        raise HTTPException(403, why)
+    e = db.get(Enrollment, eid)
+    if not e or e.class_id != c.id or not e.active:
+        raise HTTPException(404, "学生不在本班")
+    no = e.student_no
+    st = db.get(Student, no)
+    snap = db.scalar(select(StandardSnapshot).where(StandardSnapshot.semester_id == sem.id,
+                                                    StandardSnapshot.student_no == no))
+    shown = services.student_display(e, st)
+    before = {"name": shown["name"], "gender": st.gender if st else None, "college": shown["college"],
+              "band": snap.band if snap else None, "pending": bool(snap and snap.pending)}
+    name = str(body.get("name", before["name"]) or "").strip()[:64]
+    college = str(body.get("college", before["college"]) or "").strip()[:64]
+    gender = body.get("gender", before["gender"])
+    gender = {"男": "M", "女": "F", "M": "M", "F": "F"}.get(str(gender or "").strip(), None)
+    band = body.get("band", before["band"])
+    if not name:
+        raise HTTPException(400, "姓名不能为空")
+    if "gender" in body and not gender:
+        raise HTTPException(400, "请选择性别")
+    if band is not None and band not in ("12", "34"):
+        raise HTTPException(400, "标准档只能是大一大二或大三大四")
+    gender_changed = gender != before["gender"]
+    band_needed = band is not None and (band != before["band"] or before["pending"])
+    if gender_changed or (band is not None and band != before["band"]):
+        # 性别、标准档直接改变体测得分；体测已提交的班不能再动
+        locked = db.scalar(select(TeachingClass).join(Enrollment, Enrollment.class_id == TeachingClass.id).where(
+            Enrollment.semester_id == sem.id, Enrollment.student_no == no, Enrollment.active.is_(True),
+            TeachingClass.status == "已提交"))
+        if locked:
+            raise HTTPException(403, f"该生所在的 {locked.class_name} 体测成绩已提交，不能再改性别或标准档；"
+                                     "如需更正请先申请撤回")
+    changed = {k for k, v in (("name", name), ("college", college)) if v != before[k]}
+    if gender_changed:
+        changed.add("gender")
+    created = st is None and bool(changed or band_needed)
+    if created:  # 学生基础数据里没有这个人：按教师填的补一条
+        st = Student(student_no=no)
+        db.add(st)
+    if changed or created:
+        st.name, st.college, st.gender, st.manual = name, college, gender, True
+        db.flush()
+    if changed or band_needed or created:
+        grading.rebuild_snapshots(db, sem, u.staff_no, only={no})
+        snap = db.scalar(select(StandardSnapshot).where(StandardSnapshot.semester_id == sem.id,
+                                                        StandardSnapshot.student_no == no))
+        if band is not None and snap and (snap.band != band or snap.pending):
+            db.add(GradeCorrection(student_no=no, band=band, change_type="教师认定", effective_semester=sem.code,
+                                   this_semester_only=True, operator=u.staff_no,
+                                   note=f"任课教师在录入页认定（{c.class_no} {c.class_name}）"))
+            db.flush()
+            grading.rebuild_snapshots(db, sem, u.staff_no, only={no})
+            snap = db.scalar(select(StandardSnapshot).where(StandardSnapshot.semester_id == sem.id,
+                                                            StandardSnapshot.student_no == no))
+            changed.add("band")
+        services.recompute_students(db, sem, {no})
+    if not changed:
+        return {"ok": True, "changed": []}
+    after = {"name": name, "gender": gender, "college": college, "band": snap.band if snap else None,
+             "pending": bool(snap and snap.pending)}
+    services.log(db, u.staff_no, "教师修改学生信息", f"{no} {name}", sem.id, ip=client_ip(request),
+                 student_no=no, class_no=c.class_no, class_name=c.class_name,
+                 fields=sorted(changed), old=before, new=after)
+    db.commit()
+    return {"ok": True, "changed": sorted(changed)}
 
 
 @app.get("/api/classes/{cid}/check")
@@ -423,9 +513,14 @@ def submit_class(cid: int, request: Request, u: User = Depends(current_user), db
     ok, why = services.can_edit(c, sem)
     if not ok:
         raise HTTPException(403, why)
+    if services.pe_locked(c):
+        raise HTTPException(400, "本班体测成绩已经提交")
     chk = services.submit_check(services.load_class_rows(db, c, sem), services.class_config(c, sem))
-    if chk["blocking"]:
-        raise HTTPException(400, f"本班还有 {len(chk['pending'])} 名学生的年级或性别待体育部确认，确认后才能提交")
+    if chk["pending"]:
+        raise HTTPException(400, f"本班还有 {len(chk['pending'])} 名学生的年级或性别待确认，"
+                                 "可在该生的“更多”里核对后直接修改，或等体育部确认")
+    if chk["missing"]:
+        raise HTTPException(400, f"本班还有 {len(chk['missing'])} 名学生的体测成绩没有录完（没填成绩也没标特殊情况）")
     c.status, c.submitted_at, c.submitted_by = "已提交", now(), u.staff_no
     services.log(db, u.staff_no, "提交", f"{c.class_no} {c.class_name}", sem.id, ip=client_ip(request),
                  missing=len(chk["missing"]), sudden=len(chk["sudden"]))
@@ -438,7 +533,7 @@ def unlock_request(cid: int, reason: str = Body(..., embed=True), u: User = Depe
                    db: Session = Depends(get_db)):
     c, sem = _class(db, cid, u)
     if c.status != "已提交":
-        raise HTTPException(400, "本班尚未提交，无需撤回")
+        raise HTTPException(400, "本班体测成绩尚未提交，无需撤回")
     if db.scalar(select(UnlockRequest).where(UnlockRequest.class_id == c.id, UnlockRequest.status == "待审核")):
         raise HTTPException(400, "已有待审核的撤回申请")
     if not reason.strip():
@@ -460,10 +555,16 @@ def score_history(cid: int, eid: int, u: User = Depends(current_user), db: Sessi
     names = {u.staff_no: u.name for u in db.scalars(select(User))}
     snap = db.scalar(select(StandardSnapshot).where(StandardSnapshot.semester_id == sem.id,
                                                     StandardSnapshot.student_no == e.student_no))
+    st = db.get(Student, e.student_no)
+    shown = services.student_display(e, st)
     return {"history": [{"field": h.field, "old": h.old, "new": h.new, "computed": h.computed,
                          "version": h.standard_version, "operator": f"{names.get(h.operator, '')}({h.operator})",
                          "at": h.at.strftime("%Y-%m-%d %H:%M:%S"), "batch": h.batch} for h in hs],
-            "standard": _snap_dict(snap)}
+            "standard": _snap_dict(snap),
+            "student": {"name": shown["name"], "college": shown["college"], "gender": st.gender if st else None,
+                        "manual": bool(st and st.manual)},
+            "issue": {"note": e.info_error, "resolved": bool(e.info_error_resolved),
+                      "resolved_at": e.info_error_resolved_at.strftime("%Y-%m-%d %H:%M") if e.info_error_resolved_at else None}}
 
 
 def _snap_dict(snap: StandardSnapshot | None):
@@ -476,10 +577,11 @@ def _snap_dict(snap: StandardSnapshot | None):
 
 
 @app.get("/api/classes/{cid}/export")
-def export_class(cid: int, request: Request, u: User = Depends(current_user), db: Session = Depends(get_db)):
+def export_class(cid: int, request: Request, sort: str = "no", u: User = Depends(current_user),
+                 db: Session = Depends(get_db)):
     c, sem = _class(db, cid, u)
-    rows = services.load_class_rows(db, c, sem)
-    data = exporter.build_workbook(sem, [(c, rows, services.class_config(c, sem))], f"{u.name}({u.staff_no})")
+    rows = services.sort_rows(services.load_class_rows(db, c, sem), sort)
+    data = exporter.build_class_workbook(sem, c, rows, services.class_config(c, sem), f"{u.name}({u.staff_no})")
     services.log(db, u.staff_no, "导出", f"{c.class_no} {c.class_name}", sem.id, ip=client_ip(request))
     db.commit()
     return _xlsx(data, f"{sem.name}-{c.class_name}-成绩.xlsx")
@@ -610,6 +712,8 @@ def upload_revert(cid: int, batch: str, u: User = Depends(current_user), db: Ses
     hs = [h for h in hs if h.enrollment_id in eids]
     if not hs:
         raise HTTPException(404, "没有找到这次导入")
+    if services.pe_locked(c):
+        hs = [h for h in hs if h.field not in services.PE_FIELDS]
     for h in hs:
         rec = db.scalar(select(ScoreRecord).where(ScoreRecord.enrollment_id == h.enrollment_id))
         if rec is None:
@@ -730,13 +834,48 @@ def pending_list(sid: int, u: User = Depends(admin_user), db: Session = Depends(
     reasons = Counter(r.split("（")[0] for x in out for r in x["reasons"])
     teacher_pending = [class_brief(c) for c in db.scalars(select(TeachingClass).where(
         TeachingClass.semester_id == sid, TeachingClass.teacher_pending.is_(True)))]
-    info_errors = [{"student_no": e.student_no, "name": e.name, "class_name": c.class_name,
-                    "teacher": c.teacher_name, "note": e.info_error}
+    info_errors = [{"enrollment_id": e.id, "student_no": e.student_no, "name": e.name, "class_name": c.class_name,
+                    "teacher": c.teacher_name, "note": e.info_error, "resolved": bool(e.info_error_resolved)}
                    for e, c in db.execute(select(Enrollment, TeachingClass).join(
                        TeachingClass, TeachingClass.id == Enrollment.class_id).where(
-                       Enrollment.semester_id == sid, Enrollment.active.is_(True), Enrollment.info_error.is_not(None)))]
+                       Enrollment.semester_id == sid, Enrollment.active.is_(True), Enrollment.info_error.is_not(None))
+                       .order_by(Enrollment.info_error_resolved, Enrollment.student_no))]
     return {"semester": sem_dict(sem), "students": out, "summary": reasons, "teacher_pending": teacher_pending,
-            "info_errors": info_errors}
+            "info_errors": info_errors, "teacher_edits": _teacher_edits(db, sid)}
+
+
+def _teacher_edits(db: Session, sid: int, limit: int = 500) -> list[dict]:
+    """教师在录入页改过的学生（姓名、性别、学院、标准档），供体育部抽查。"""
+    names = {x.staff_no: x.name for x in db.scalars(select(User))}
+    logs = db.scalars(select(AuditLog).where(AuditLog.semester_id == sid, AuditLog.action == "教师修改学生信息")
+                      .order_by(AuditLog.id.desc()).limit(limit)).all()
+    label = {"name": "姓名", "gender": "性别", "college": "学院", "band": "标准档"}
+    show = {"gender": lambda v: {"M": "男", "F": "女"}.get(v, "待确认"), "band": services.band_label}
+    out = []
+    for l in logs:
+        d = l.detail or {}
+        old, new = d.get("old") or {}, d.get("new") or {}
+        changes = [f"{label.get(f, f)}：{show.get(f, lambda v: v or '空')(old.get(f))} → {show.get(f, lambda v: v or '空')(new.get(f))}"
+                   for f in d.get("fields", [])]
+        out.append({"at": l.at.strftime("%Y-%m-%d %H:%M"), "teacher": f"{names.get(l.actor, '')}({l.actor})",
+                    "student_no": d.get("student_no", ""), "name": new.get("name", ""),
+                    "class_name": d.get("class_name", ""), "changes": changes})
+    return out
+
+
+@app.post("/api/admin/enrollments/{eid}/issue-resolved")
+def resolve_issue(eid: int, resolved: bool = Body(True, embed=True), u: User = Depends(admin_user),
+                  db: Session = Depends(get_db)):
+    """体育部把教师提交的“其他问题”标为已处理（教师端显示已处理）。"""
+    e, c, sem = _enrollment_for_admin(db, eid)
+    if not e.info_error:
+        raise HTTPException(400, "这名学生没有待处理的问题")
+    e.info_error_resolved = bool(resolved)
+    e.info_error_resolved_by, e.info_error_resolved_at = (u.staff_no, now()) if resolved else (None, None)
+    services.log(db, u.staff_no, "处理其他问题", f"{e.student_no} {e.name}", sem.id, resolved=resolved,
+                 note=e.info_error, class_no=c.class_no)
+    db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/admin/semesters/{sid}/students/{no}")
@@ -806,7 +945,8 @@ def _student_dict(st: Student | None) -> dict | None:
 def _enroll_dict(e: Enrollment, c: TeachingClass) -> dict:
     return {"enrollment_id": e.id, "active": e.active, "manual": e.manual, "class_id": c.id, "class_no": c.class_no,
             "class_name": c.class_name, "course_name": c.course_name, "teacher": c.teacher_name,
-            "class_status": c.status, **{f: getattr(e, f) for f in ENROLL_FIELDS}, "info_error": e.info_error}
+            "class_status": c.status, **{f: getattr(e, f) for f in ENROLL_FIELDS}, "info_error": e.info_error,
+            "info_error_resolved": bool(e.info_error_resolved)}
 
 
 def _refresh_student(db: Session, sem: Semester, no: str, operator: str):
@@ -915,7 +1055,9 @@ def update_enrollment(eid: int, request: Request, body: dict = Body(...), u: Use
     for f in ENROLL_FIELDS:
         if f in body:
             setattr(e, f, str(body[f] or "").strip()[:128])
-    e.active, e.manual, e.info_error = True, True, None
+    e.active, e.manual = True, True
+    if e.info_error and not e.info_error_resolved:  # 体育部改了这条选课，教师提的问题视为已处理
+        e.info_error_resolved, e.info_error_resolved_by, e.info_error_resolved_at = True, u.staff_no, now()
     db.flush()
     _refresh_student(db, sem, e.student_no, u.staff_no)
     if target.id != c.id:
@@ -1081,12 +1223,33 @@ def export_semester(sid: int, request: Request, u: User = Depends(admin_user), d
     return _xlsx(data, f"{sem.name}-全部成绩.xlsx")
 
 
+@app.get("/api/admin/semesters/{sid}/export-pe")
+def export_semester_pe(sid: int, request: Request, u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    """全校体测成绩表：教学班号、学号、姓名、性别、本学期两项体测成绩，按学号排序。"""
+    sem = _sem(db, sid)
+    classes = db.scalars(select(TeachingClass).where(TeachingClass.semester_id == sid)).all()
+    sections = [(c, services.load_class_rows(db, c, sem), services.class_config(c, sem)) for c in classes]
+    data = exporter.build_pe_workbook(sem, sections)
+    services.log(db, u.staff_no, "导出", f"{sem.name} 全校体测成绩表", sid, ip=client_ip(request), classes=len(classes))
+    db.commit()
+    return _xlsx(data, f"{sem.name}-全校体测成绩表.xlsx")
+
+
 @app.get("/api/admin/semesters/{sid}/overview")
 def semester_overview(sid: int, u: User = Depends(admin_user), db: Session = Depends(get_db)):
     sem = _sem(db, sid)
     st = dict(db.execute(select(TeachingClass.status, func.count()).where(TeachingClass.semester_id == sid)
                          .group_by(TeachingClass.status)).all())
+    cls = db.scalars(select(TeachingClass).where(TeachingClass.semester_id == sid)
+                     .order_by(TeachingClass.course_name, TeachingClass.class_no)).all()
     return {"semester": sem_dict(sem), "classes": sum(st.values()), "status": st,
+            "pe_submitted": st.get("已提交", 0),
+            "class_list": [{"id": c.id, "class_no": c.class_no, "course_name": c.course_name, "class_name": c.class_name,
+                            "teacher_name": c.teacher_name, "submitted": c.status == "已提交",
+                            "submitted_at": c.submitted_at.strftime("%Y-%m-%d %H:%M") if c.submitted_at and c.status == "已提交" else None}
+                           for c in cls],
+            "teacher_edits": db.scalar(select(func.count()).select_from(AuditLog).where(
+                AuditLog.semester_id == sid, AuditLog.action == "教师修改学生信息")),
             "enrollments": db.scalar(select(func.count()).select_from(Enrollment).where(
                 Enrollment.semester_id == sid, Enrollment.active.is_(True))),
             "pending": db.scalar(select(func.count()).select_from(StandardSnapshot).where(
@@ -1095,20 +1258,57 @@ def semester_overview(sid: int, u: User = Depends(admin_user), db: Session = Dep
                 TeachingClass, TeachingClass.id == UnlockRequest.class_id).where(
                 TeachingClass.semester_id == sid, UnlockRequest.status == "待审核")),
             "info_errors": db.scalar(select(func.count()).select_from(Enrollment).where(
-                Enrollment.semester_id == sid, Enrollment.active.is_(True), Enrollment.info_error.is_not(None))),
+                Enrollment.semester_id == sid, Enrollment.active.is_(True), Enrollment.info_error.is_not(None),
+                Enrollment.info_error_resolved.is_not(True))),
             "teacher_pending": db.scalar(select(func.count()).select_from(TeachingClass).where(
                 TeachingClass.semester_id == sid, TeachingClass.teacher_pending.is_(True)))}
 
 
 @app.get("/api/admin/users")
 def list_users(u: User = Depends(admin_user), db: Session = Depends(get_db)):
-    return [{"staff_no": x.staff_no, "name": x.name, "is_admin": is_admin(x)}
+    return [{"staff_no": x.staff_no, "name": x.name, "is_admin": is_admin(x), "is_public": bool(x.is_public),
+             "must_change_password": bool(x.must_change_password) if x.is_public else False}
             for x in db.scalars(select(User).order_by(User.staff_no))]
+
+
+@app.post("/api/admin/public-accounts")
+def create_public_account(request: Request, name: str = Body(...), staff_no: str = Body(...),
+                          u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    """新建体育部公共账号：生成初始口令（只显示这一次），首次登录须修改。可以建多个。"""
+    name, staff_no = name.strip()[:64], staff_no.strip()
+    if not name:
+        raise HTTPException(400, "请填写账号名称")
+    if not re.fullmatch(r"[A-Za-z0-9_]{3,32}", staff_no):
+        raise HTTPException(400, "工号只能用字母、数字、下划线，3–32 位")
+    if staff_no in config.ADMIN_STAFF_NOS or db.get(User, staff_no):
+        raise HTTPException(409, f"工号 {staff_no} 已被使用，请换一个")
+    pw = auth.gen_password(12)
+    db.add(User(staff_no=staff_no, name=name, is_public=True, is_admin=False,
+                password_hash=auth.hash_password(pw), must_change_password=True))
+    services.log(db, u.staff_no, "公共账号", staff_no, ip=client_ip(request), op="新建", name=name)
+    db.commit()
+    return {"ok": True, "staff_no": staff_no, "name": name, "password": pw}
+
+
+@app.post("/api/admin/public-accounts/{staff_no}/reset")
+def reset_public_password(staff_no: str, request: Request, u: User = Depends(admin_user),
+                          db: Session = Depends(get_db)):
+    x = db.get(User, staff_no)
+    if not x or not x.is_public:
+        raise HTTPException(404, "公共账号不存在")
+    pw = auth.gen_password(12)
+    x.password_hash, x.must_change_password = auth.hash_password(pw), True
+    services.log(db, u.staff_no, "公共账号", staff_no, ip=client_ip(request), op="重置口令")
+    db.commit()
+    return {"ok": True, "staff_no": staff_no, "password": pw}
 
 
 @app.post("/api/admin/users/{staff_no}")
 def set_admin(staff_no: str, is_admin_flag: bool = Body(..., embed=True, alias="is_admin"),
               u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    existing = db.get(User, staff_no)
+    if existing and existing.is_public and is_admin_flag:
+        raise HTTPException(400, "公共账号不能设为管理员")
     x = auth.ensure_user(db, staff_no)
     if x.staff_no == u.staff_no and not is_admin_flag:
         raise HTTPException(400, "不能取消自己的管理员身份")
