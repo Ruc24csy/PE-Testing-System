@@ -192,14 +192,22 @@ def list_semesters(u: User = Depends(current_user), db: Session = Depends(get_db
     return [sem_dict(s) for s in sems]
 
 
+SEMESTER_YEAR_MIN, SEMESTER_YEAR_MAX = 2020, 2100
+
+
 @app.post("/api/admin/semesters")
-def create_semester(label: str = Body(..., embed=True), u: User = Depends(admin_user), db: Session = Depends(get_db)):
-    p = importer.parse_semester(label)
-    if not p:
-        raise HTTPException(400, "学期写法应为“2026-2027学年秋季学期”或“2026-2027-1”")
-    code, name, y, season = p
+def create_semester(body: dict = Body(...), u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    """新建学期：前端选学年起始年份和秋季/春季，名称与编码统一由这里生成。"""
+    y, season = body.get("start_year"), body.get("season")
+    if isinstance(y, str) and y.strip().isdigit():
+        y = int(y.strip())
+    if not isinstance(y, int) or isinstance(y, bool) or not SEMESTER_YEAR_MIN <= y <= SEMESTER_YEAR_MAX:
+        raise HTTPException(400, f"学年起始年份应为 {SEMESTER_YEAR_MIN}–{SEMESTER_YEAR_MAX} 之间的整数")
+    if season not in importer.SEASONS:
+        raise HTTPException(400, "学期只能选秋季学期或春季学期")
+    code, name, y, season = importer.semester_of(y, season)
     if db.scalar(select(Semester).where(Semester.code == code)):
-        raise HTTPException(400, f"{name} 已存在")
+        raise HTTPException(409, f"{name}已存在，不能重复新建")
     first = db.scalar(select(func.count()).select_from(Semester)) == 0
     s = Semester(code=code, name=name, start_year=y, season=season, is_current=first,
                  config=scoring.default_config(season))

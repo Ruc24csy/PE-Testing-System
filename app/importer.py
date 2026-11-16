@@ -101,9 +101,17 @@ def parse_semester(text: str) -> tuple[str, str, int, str] | None:
         if not m:
             return None
         y, term = int(m.group(1)), "1" if m.group(3) == "秋" else "2"
-    season = "fall" if term == "1" else "spring"
-    name = f"{y}-{y + 1}学年{'秋季' if term == '1' else '春季'}学期"
-    return f"{y}-{y + 1}-{term}", name, y, season
+    return semester_of(y, "fall" if term == "1" else "spring")
+
+
+SEASONS = ("fall", "spring")  # 系统只有秋季、春季两个学期，没有夏季学期
+
+
+def semester_of(start_year: int, season: str) -> tuple[str, str, int, str]:
+    """由学年起始年份和学期生成 (code, name, start_year, season)：2026 + fall → 2026-2027-1 / 2026-2027学年秋季学期。"""
+    term = "1" if season == "fall" else "2"
+    name = f"{start_year}-{start_year + 1}学年{'秋季' if term == '1' else '春季'}学期"
+    return f"{start_year}-{start_year + 1}-{term}", name, start_year, season
 
 
 # ---------------------------------------------------------------- 读取文件

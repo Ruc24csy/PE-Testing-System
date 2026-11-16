@@ -78,7 +78,7 @@ def do_import(client, kind, data, sid, mode="overwrite"):
 
 def test_full_flow(admin, teacher):
     assert teacher.get("/api/admin/users").status_code == 403
-    sem = admin.post("/api/admin/semesters", json={"label": "2026-2027学年秋季学期"}).json()
+    sem = admin.post("/api/admin/semesters", json={"start_year": 2026, "season": "fall"}).json()
     assert sem["is_current"] and sem["config"]["slots"][0]["items"]["M"] == "run1000"
     sid = sem["id"]
     assert teacher.get(f"/api/semesters/{sid}/classes").json()["imported"] is False
@@ -213,7 +213,7 @@ def test_full_flow(admin, teacher):
     assert {"导入", "保存", "提交", "撤回申请", "撤回审核", "改档", "导出", "配置"} <= actions
 
     # 以往学期只读
-    sem2 = admin.post("/api/admin/semesters", json={"label": "2026-2027-2"}).json()
+    sem2 = admin.post("/api/admin/semesters", json={"start_year": 2026, "season": "spring"}).json()
     assert sem2["config"]["slots"][0]["items"]["M"] == "run50"
     admin.patch(f"/api/admin/semesters/{sem2['id']}", json={"is_current": True})
     r = teacher.post(f"/api/classes/{cid}/cells", json={"changes": [{"enrollment_id": e2, "field": "skill", "value": "50"}]})
@@ -346,3 +346,19 @@ def test_logout_clears_cache_only():
     # 只清缓存：本地存储里有未保存的成绩草稿，cookies 会波及同域其他系统
     assert r.headers["Clear-Site-Data"] == '"cache"'
     assert c.get("/api/me").status_code == 401
+
+
+def test_create_semester_validation(admin, teacher):
+    assert teacher.post("/api/admin/semesters", json={"start_year": 2027, "season": "fall"}).status_code == 403
+    r = admin.post("/api/admin/semesters", json={"start_year": 2027, "season": "spring"})
+    assert r.status_code == 200
+    sem = r.json()
+    assert sem["code"] == "2027-2028-2" and sem["name"] == "2027-2028学年春季学期" and sem["season"] == "spring"
+    dup = admin.post("/api/admin/semesters", json={"start_year": 2027, "season": "spring"})
+    assert dup.status_code == 409 and "已存在" in dup.json()["detail"]
+    for bad in ({"start_year": 2019, "season": "fall"}, {"start_year": 2101, "season": "fall"},
+                {"start_year": "abc", "season": "fall"}, {"start_year": True, "season": "fall"},
+                {"start_year": 2027, "season": "summer"}, {"season": "fall"}, {"label": "2027-2028学年秋季学期"}):
+        r = admin.post("/api/admin/semesters", json=bad)
+        assert r.status_code == 400, bad
+    assert admin.post("/api/admin/semesters", json={"start_year": "2027", "season": "fall"}).json()["code"] == "2027-2028-1"

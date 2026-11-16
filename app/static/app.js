@@ -706,13 +706,38 @@ async function adOverview(el) {
 async function adSemesters(el) {
   const sems = await api("/api/semesters");
   const label = (it) => ({ run1000: "1000米跑", run800: "800米跑", run50: "50米跑", long_jump: "立定跳远", pull_up: "引体向上", sit_up: "仰卧起坐" }[it] || it);
-  el.innerHTML = `<div class="row"><input type="text" id="newSem" placeholder="例如 2026-2027学年秋季学期" size="30"><button class="primary" id="newSemBtn">新建学期</button>
+  // 默认带出下一个要建的学期：8 月起是当年秋季，1–7 月是上一学年的春季
+  const now = new Date(), defYear = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1, defSeason = now.getMonth() >= 7 ? "fall" : "spring";
+  el.innerHTML = `<div class="row">学年 <input type="number" id="newSemYear" min="2020" max="2100" step="1" value="${defYear}" style="width:6em"> – <span id="newSemYear2">${defYear + 1}</span> 学年
+    <select id="newSemSeason"><option value="fall" ${defSeason === "fall" ? "selected" : ""}>秋季学期</option><option value="spring" ${defSeason === "spring" ? "selected" : ""}>春季学期</option></select>
+    <button class="primary" id="newSemBtn">新建学期</button> <span id="newSemHint" class="small"></span></div>
+    <div class="row">
     <span class="muted small">新建学期时自动带入默认体测项目配置：秋季耐力跑20%、立定跳远10%；春季50米跑20%、引体向上/仰卧起坐10%。</span></div>
     <table class="list" style="margin-top:12px"><tr><th>学期</th><th>体测项目配置（默认）</th><th>状态</th><th>操作</th></tr>
     ${sems.map((s) => `<tr><td>${esc(s.name)}</td><td>${s.config.slots.map((x) => `${label(x.items.M)}${x.items.M !== x.items.F ? "/" + label(x.items.F) : ""} ${x.weight * 100}%`).join("、")}、技能 ${s.config.skill_weight * 100}%、平时 ${s.config.regular_weight * 100}%</td>
       <td>${s.is_current ? '<span class="tag cur">当前学期</span>' : s.entry_open ? '<span class="tag warn">已开放补录</span>' : '<span class="tag">只读</span>'}</td>
       <td>${s.is_current ? "" : `<button class="link" data-cur="${s.id}">设为当前学期</button> <button class="link" data-open="${s.id}" data-v="${s.entry_open ? 0 : 1}">${s.entry_open ? "关闭补录窗口" : "开放补录窗口"}</button>`}</td></tr>`).join("")}</table>`;
-  $("#newSemBtn").onclick = async () => { try { await api("/api/admin/semesters", { method: "POST", body: { label: $("#newSem").value } }); await loadSemesters(); renderTop(); adSemesters(el); toast("已新建"); } catch (e) { toast(e.message, true); } };
+  const semPick = () => {
+    const v = $("#newSemYear").value.trim(), y = Number(v), season = $("#newSemSeason").value;
+    if (!/^\d{4}$/.test(v) || y < 2020 || y > 2100) return { err: "学年起始年份请填 2020–2100 之间的四位年份" };
+    const code = `${y}-${y + 1}-${season === "fall" ? 1 : 2}`, name = `${y}-${y + 1}学年${season === "fall" ? "秋季" : "春季"}学期`;
+    return sems.some((s) => s.code === code) ? { err: `${name}已存在，不能重复新建` } : { y, season, name };
+  };
+  const semHint = () => {
+    const p = semPick(), ok = !p.err;
+    $("#newSemYear2").textContent = /^\d{4}$/.test($("#newSemYear").value.trim()) ? Number($("#newSemYear").value) + 1 : "____";
+    $("#newSemHint").textContent = ok ? `将新建：${p.name}` : p.err;
+    $("#newSemHint").className = ok ? "small muted" : "small"; $("#newSemHint").style.color = ok ? "" : "var(--err)";
+    $("#newSemBtn").disabled = !ok;
+  };
+  $("#newSemYear").oninput = semHint;
+  $("#newSemSeason").onchange = semHint;
+  semHint();
+  $("#newSemBtn").onclick = async () => {
+    const p = semPick();
+    if (p.err) return toast(p.err, true);
+    try { await api("/api/admin/semesters", { method: "POST", body: { start_year: p.y, season: p.season } }); await loadSemesters(); renderTop(); adSemesters(el); toast(`已新建${p.name}`); } catch (e) { toast(e.message, true); }
+  };
   $$("[data-cur]", el).forEach((b) => (b.onclick = async () => { await api(`/api/admin/semesters/${b.dataset.cur}`, { method: "PATCH", body: { is_current: true } }); await loadSemesters(); renderTop(); adSemesters(el); }));
   $$("[data-open]", el).forEach((b) => (b.onclick = async () => { await api(`/api/admin/semesters/${b.dataset.open}`, { method: "PATCH", body: { entry_open: b.dataset.v === "1" } }); await loadSemesters(); adSemesters(el); }));
 }
