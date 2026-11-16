@@ -176,17 +176,29 @@ SSH 的版本号是协议握手的一部分，不重新编译 OpenSSH 去不掉�
    ss -lntu | grep ':111 ' || echo "111 端口已关闭"
    ```
 
-2. 屏蔽 ICMP 时间戳请求和应答，并保存成开机自动加载：
+2. 屏蔽 ICMP 时间戳请求和应答，用一个只加这两条规则的开机服务：
 
    ```bash
-   sudo iptables -I INPUT -p icmp --icmp-type timestamp-request -j DROP
-   sudo iptables -I OUTPUT -p icmp --icmp-type timestamp-reply -j DROP
-   sudo iptables -S | grep timestamp
-   # dnf 系：装 iptables-services 后保存（不要启动 firewalld）
-   sudo dnf install -y iptables-services && sudo service iptables save && sudo systemctl enable iptables
+   sudo tee /etc/systemd/system/block-icmp-timestamp.service >/dev/null <<'UNIT'
+   [Unit]
+   Description=屏蔽 ICMP 时间戳请求与应答
+   After=network.target
+
+   [Service]
+   Type=oneshot
+   RemainAfterExit=yes
+   ExecStart=/bin/sh -c 'iptables -C INPUT -p icmp --icmp-type timestamp-request -j DROP 2>/dev/null || iptables -I INPUT -p icmp --icmp-type timestamp-request -j DROP'
+   ExecStart=/bin/sh -c 'iptables -C OUTPUT -p icmp --icmp-type timestamp-reply -j DROP 2>/dev/null || iptables -I OUTPUT -p icmp --icmp-type timestamp-reply -j DROP'
+
+   [Install]
+   WantedBy=multi-user.target
+   UNIT
+   sudo systemctl daemon-reload && sudo systemctl enable --now block-icmp-timestamp
+   sudo iptables -S | grep -E 'icmp-type (13|14)'   # 应看到两条 DROP
    ```
 
-   `service iptables save` 会把当前全部规则写进 `/etc/sysconfig/iptables`。保存前先 `sudo iptables -S` 看一眼，确认里面没有会挡住 10001 端口的规则。
+   不要用 `iptables-save`、`service iptables save` 或 iptables-services 保存整份规则：服务器上的主机安全软件会动态加规则（`IN_HIDS_SSHD_DENY_DROP` 链，引用 ipset 封禁 SSH 暴力破解的 IP），整份保存会把它一起存下，开机时 ipset 还没建好就会整份加载失败，还可能和安全软件冲突。
+   `iptables -S` 里 ICMP 类型显示为编号（13 是时间戳请求、14 是应答），所以检查时搜编号，搜 `timestamp` 搜不到。
 
 ## 9. 漏洞扫描里不修的项
 
