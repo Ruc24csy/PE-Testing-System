@@ -469,14 +469,14 @@ def teacher_edit_student(cid: int, eid: int, request: Request, body: dict = Body
     changed = {k for k, v in (("name", name), ("college", college)) if v != before[k]}
     if gender_changed:
         changed.add("gender")
-    if st is None:
-        st = Student(student_no=no, name=name, college=college, gender=gender)
+    created = st is None and bool(changed or band_needed)
+    if created:  # 学生基础数据里没有这个人：按教师填的补一条
+        st = Student(student_no=no)
         db.add(st)
-        changed |= {"name", "college"}
-    if changed:
+    if changed or created:
         st.name, st.college, st.gender, st.manual = name, college, gender, True
         db.flush()
-    if changed or band_needed:
+    if changed or band_needed or created:
         grading.rebuild_snapshots(db, sem, u.staff_no, only={no})
         snap = db.scalar(select(StandardSnapshot).where(StandardSnapshot.semester_id == sem.id,
                                                         StandardSnapshot.student_no == no))

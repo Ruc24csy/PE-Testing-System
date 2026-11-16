@@ -614,7 +614,7 @@ async function rowMenu(C, eid) {
   const courseSel = `<label>课程成绩 <select data-st="course_status" ${ed ? "" : "disabled"}>${(C.d.course_statuses || ["正常"]).map((s) => `<option value="${s}" ${(r.course_status || "正常") === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>`;
   const showNote = ["作弊", "违纪"].includes(r.values.a_status) || ["作弊", "违纪"].includes(r.values.b_status) || !!r.values.note;
   const lockInfo = peLock ? "体测已提交，性别和标准档不能再改" : "";
-  const pendingLine = st.pending ? `<div class="notice" style="margin:6px 0">这名学生的${st.reasons && st.reasons.some((x) => x.includes("性别")) ? "性别或" : ""}标准档待确认：${esc((st.reasons || []).join("；"))}。核对后在下面改好保存，体测即可提交。</div>` : "";
+  const pendingLine = st.pending ? `<div class="notice" style="margin:6px 0">这名学生的年级或性别待确认：${esc((st.reasons || []).join("；"))}。核对后在下面改好性别和标准档并保存，体测即可提交。</div>` : "";
   const hist = h.history || [];
   modal(`<h3>${esc(r.student_no)} ${esc(r.name)}</h3>
     <h4>特殊情况</h4><div class="row">${stSel("a")}${stSel("b")}${courseSel}</div>
