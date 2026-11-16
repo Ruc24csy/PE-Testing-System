@@ -167,9 +167,27 @@ def test_full_flow(admin, teacher):
     cfg["skill_weight"] = 0.6
     teacher.put(f"/api/classes/{cid}/config", json={"cfg": cfg})
 
+    # 只交体测：体测还有没录完的（没填也没标特殊情况）不能提交；运动技能、平时成绩不查
+    r = teacher.post(f"/api/classes/{cid}/submit")
+    assert r.status_code == 400 and "体测" in r.json()["detail"]
+    d = teacher.get(f"/api/classes/{cid}").json()
+    fill = []
+    for x in d["rows"]:
+        for k in ("a", "b"):
+            if x["values"][f"{k}_status"] == "正常" and x["values"][f"{k}_raw"] is None:
+                fill.append({"enrollment_id": x["enrollment_id"], "field": f"{k}_status", "value": "缓测"})
+    teacher.post(f"/api/classes/{cid}/cells", json={"changes": fill})
     assert teacher.post(f"/api/classes/{cid}/submit").status_code == 200
-    r = teacher.post(f"/api/classes/{cid}/cells", json={"changes": [{"enrollment_id": e2, "field": "skill", "value": "50"}]})
-    assert r.status_code == 403  # 已提交锁定
+    # 提交后只锁体测：运动技能能改，体测成绩和状态不能改
+    r = teacher.post(f"/api/classes/{cid}/cells", json={"changes": [
+        {"enrollment_id": e2, "field": "skill", "value": "50"},
+        {"enrollment_id": e2, "field": "a_raw", "value": "3:30"},
+        {"enrollment_id": e3, "field": "b_status", "value": "正常"}]})
+    assert r.status_code == 200
+    ok = {x["field"]: x["ok"] for x in r.json()["results"]}
+    assert ok == {"skill": True, "a_raw": False, "b_status": False}
+    assert teacher.put(f"/api/classes/{cid}/config", json={"cfg": cfg}).status_code == 403
+    teacher.post(f"/api/classes/{cid}/cells", json={"changes": [{"enrollment_id": e2, "field": "skill", "value": ""}]})
     assert teacher.post(f"/api/classes/{cid}/unlock-request", json={"reason": "录错一人"}).status_code == 200
     ul = admin.get("/api/admin/unlock-requests").json()[0]
     assert admin.post(f"/api/admin/unlock-requests/{ul['id']}", json={"approve": True, "note": ""}).status_code == 200
@@ -184,9 +202,12 @@ def test_full_flow(admin, teacher):
     assert r.status_code == 200
     wb = openpyxl.load_workbook(io.BytesIO(r.content))
     ws = wb["成绩"]
-    heads = [c.value for c in ws[1]]
-    first = {h: c.value for h, c in zip(heads, ws[2])}
-    assert first["学号"] == "2026200001" and first["课程总成绩"] == 95.9 and first["耐力跑原始成绩"] == "2'50\""
+    assert [c.value for c in ws[1]][:6] == ["序号", "学号", "性别", "姓名", "总成绩", "1000米跑/800米跑"]
+    assert [c.value for c in ws[2]][5:9] == ["成绩", "得分", "成绩", "得分"]
+    assert [c.value for c in ws[3]][1] == "2023200003"  # 默认照网页按学号排序
+    first = next([c.value for c in row] for row in ws.iter_rows(min_row=3) if row[1].value == "2026200001")
+    assert first[1:6] == ["2026200001", "男", "张一", 95.9, "2'50\""] and first[6] == 107
+    assert first[0] in (1, 2, 3, 4, 5)
     assert "评分表版本" in [c.value for c in wb["说明"]["A"]]
 
     # 整班上传（备用路径）与回退
@@ -327,6 +348,8 @@ def test_preview_does_not_save(admin):
     assert res["errors"][0]["field"] == "skill"
     # 四项都齐了才出小计与总成绩
     res = admin.post(f"/api/classes/{cid}/preview", json={"changes": [
+        {"enrollment_id": r["enrollment_id"], "field": "a_status", "value": "正常"},
+        {"enrollment_id": r["enrollment_id"], "field": "b_status", "value": "正常"},
         {"enrollment_id": r["enrollment_id"], "field": "a_raw", "value": "3分40秒"},
         {"enrollment_id": r["enrollment_id"], "field": "b_raw", "value": "180"},
         {"enrollment_id": r["enrollment_id"], "field": "skill", "value": "55"},

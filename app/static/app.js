@@ -928,7 +928,7 @@ async function adLogs(el, page = 1) {
   const qs = new URLSearchParams({ action, page });
   if (onlySem) qs.set("semester_id", sem.id);
   const d = await api(`/api/admin/logs?${qs}`);
-  el.innerHTML = `<div class="row"><select id="lgScope"><option value="">全部学期</option>${sem ? `<option value="sem" ${onlySem ? "selected" : ""}>${esc(sem.name)}（含登录等通用记录）</option>` : ""}</select><select id="lgAct"><option value="">全部操作</option>${["保存", "提交", "撤回申请", "撤回审核", "改档", "导入", "导出", "配置", "回退导入", "指定教师", "学期设置", "登录"].map((a) => `<option ${a === action ? "selected" : ""}>${a}</option>`).join("")}</select><span class="muted">共 ${d.total} 条</span>
+  el.innerHTML = `<div class="row"><select id="lgScope"><option value="">全部学期</option>${sem ? `<option value="sem" ${onlySem ? "selected" : ""}>${esc(sem.name)}（含登录等通用记录）</option>` : ""}</select><select id="lgAct"><option value="">全部操作</option>${["保存", "提交", "撤回申请", "撤回审核", "改档", "教师修改学生信息", "提交其他问题", "处理其他问题", "导入", "导出", "配置", "回退导入", "指定教师", "学期设置", "公共账号", "登录"].map((a) => `<option ${a === action ? "selected" : ""}>${a}</option>`).join("")}</select><span class="muted">共 ${d.total} 条</span>
     <span class="spacer"></span>${page > 1 ? '<button id="lgPrev">上一页</button>' : ""}${d.total > page * 100 ? '<button id="lgNext">下一页</button>' : ""}</div>
     <table class="list small" style="margin-top:10px"><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>详情</th><th>IP</th></tr>
     ${d.logs.map((l) => `<tr><td>${esc(l.at)}</td><td>${esc(l.actor_name)} ${esc(l.actor)}</td><td>${esc(l.action)}</td><td>${esc(l.target)}</td><td style="max-width:520px;word-break:break-all">${esc(JSON.stringify(l.detail)).slice(0, 400)}</td><td>${esc(l.ip)}</td></tr>`).join("")}</table>`;

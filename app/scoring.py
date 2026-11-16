@@ -23,6 +23,8 @@ BONUS_ITEMS = {"run1000", "run800", "pull_up", "sit_up"}  # 加分只适用于�
 
 STATUSES = ["正常", "免测", "缓测", "缺考", "作弊", "违纪"]
 ZERO_STATUSES = {"缺考", "作弊", "违纪"}
+# 课程成绩特殊情况：非“正常”时总成绩不算，显示状态文字，运动技能和平时成绩可以不填
+COURSE_STATUSES = ["正常", "缓考", "缺考", "退课"]
 
 
 def level_name(score: float | None) -> str | None:
@@ -264,6 +266,11 @@ def compute_row(*, gender: str | None, band: str | None, config: dict, values: d
     if sub_ready and config["slots"]:
         out["subtotal"] = d2(float(sub))
     skill, regular = values.get("skill"), values.get("regular")
+    course = values.get("course_status") or "正常"
+    out["course_status"] = course
+    if course != "正常":
+        # 总成绩不算；“录完”只看两项体测
+        return out
     if skill is None or regular is None:
         out["complete"] = False
     # 总成绩同样要四项都齐（体测小计＋运动技能＋平时成绩）才出数

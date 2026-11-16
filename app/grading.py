@@ -30,6 +30,7 @@ def semester_start_year(code: str) -> int:
 def correction_for(corrs: list[GradeCorrection], semester: Semester) -> GradeCorrection | None:
     """取对本学期生效的最新一条校正记录。"""
     valid = [c for c in corrs if not c.effective_semester or c.effective_semester <= semester.code]
+    valid = [c for c in valid if not c.this_semester_only or c.effective_semester == semester.code]
     if not valid:
         return None
     return sorted(valid, key=lambda c: (c.effective_semester or "", c.id))[-1]
