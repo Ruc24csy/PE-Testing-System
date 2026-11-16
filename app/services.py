@@ -26,7 +26,10 @@ def excellence(rows: list[dict]) -> dict:
             "over": bool(n) and ex / n > EXCELLENT_WARN}
 
 
-INPUT_FIELDS = ("a_raw", "a_status", "b_raw", "b_status", "skill", "regular", "note")
+INPUT_FIELDS = ("a_raw", "a_status", "b_raw", "b_status", "skill", "regular", "note", "course_status")
+# 只有体测需要提交：提交后锁定的只是两项体测的成绩和特殊状态
+PE_FIELDS = ("a_raw", "a_status", "b_raw", "b_status")
+PE_LOCKED_MSG = "本班体测成绩已提交并锁定，如需更正请提交撤回申请"
 
 
 def log(db: Session, actor: str, action: str, target: str = "", semester_id: int | None = None,
@@ -39,11 +42,22 @@ def class_config(c: TeachingClass, sem: Semester) -> dict:
 
 
 def can_edit(c: TeachingClass, sem: Semester) -> tuple[bool, str]:
-    if c.status == "已提交":
-        return False, "本班成绩已提交并锁定，如需更正请提交撤回申请"
+    """学期层面能不能录入。体测提交后的锁定按字段判断，见 pe_locked。"""
     if not sem.is_current and not sem.entry_open:
         return False, "以往学期为只读；需补录或更正时请联系体育部开放录入窗口"
     return True, ""
+
+
+def pe_locked(c: TeachingClass) -> bool:
+    return c.status == "已提交"
+
+
+def student_display(e: Enrollment, stu: Student | None) -> dict:
+    """姓名、学院：教师或体育部改过学生基础数据（manual）时以学生基础数据为准，否则以选课表为准。"""
+    manual = bool(stu and stu.manual)
+    name = (stu.name if manual and stu.name else "") or e.name or (stu.name if stu else "")
+    college = (stu.college if manual and stu.college else "") or e.college or (stu.college if stu else "")
+    return {"name": name, "college": college}
 
 
 def load_class_rows(db: Session, c: TeachingClass, sem: Semester) -> list[dict]:
@@ -90,8 +104,8 @@ def build_row(seq, e: Enrollment, stu: Student | None, snap: StandardSnapshot | 
               cfg: dict, sem: Semester, prev: dict | None) -> dict:
     gender = stu.gender if stu else None
     band = snap.band if snap else None
-    values = {f: getattr(rec, f) if rec else None for f in INPUT_FIELDS}
-    for k in ("a_status", "b_status"):
+    values = {f: getattr(rec, f, None) if rec else None for f in INPUT_FIELDS}
+    for k in ("a_status", "b_status", "course_status"):
         values[k] = values[k] or "正常"
     comp = scoring.compute_row(gender=gender, band=band, config=cfg, values=values,
                                version=rec.standard_version if rec else sem.standard_version)
@@ -112,16 +126,18 @@ def build_row(seq, e: Enrollment, stu: Student | None, snap: StandardSnapshot | 
             new = values.get(f"{slot['key']}_raw")
             if old and new and abs(new - old) / old > 0.25:
                 sudden.append(f"{scoring.item_label(it)}与上学期（{scoring.fmt_raw(it, old)}）相差超过25%")
+    shown = student_display(e, stu)
     row = {
-        "enrollment_id": e.id, "seq": seq, "student_no": e.student_no, "name": e.name or (stu.name if stu else ""),
+        "enrollment_id": e.id, "seq": seq, "student_no": e.student_no, "name": shown["name"],
         "gender": {"M": "男", "F": "女"}.get(gender, "待确认"), "gender_code": gender,
-        "college": e.college or (stu.college if stu else ""), "major": e.major or (stu.major if stu else ""),
+        "college": shown["college"], "major": e.major or (stu.major if stu else ""),
         "class_label": e.class_label or (stu.class_name if stu else ""),
         "grade_num": snap.grade_num if snap else None,
         "band": band, "band_label": band_label(band, pending),
         "band_source": snap.source if snap else "", "pending": pending,
         "pending_reasons": snap.pending_reasons if snap else ["尚未生成标准档"],
-        "info_error": e.info_error, "flags": flags,
+        "info_error": e.info_error, "info_error_resolved": bool(e.info_error_resolved), "flags": flags,
+        "course_status": values["course_status"],
         "values": values,
         "display": {}, "subtotal": comp["subtotal"], "total": comp["total"], "complete": comp["complete"],
         "issues": issues, "sudden": sudden,
@@ -192,6 +208,10 @@ def parse_cell(field: str, text, cfg: dict, gender: str | None):
         return text
     if field == "note":
         return str(text)[:256]
+    if field == "course_status":
+        if text not in scoring.COURSE_STATUSES:
+            raise scoring.ParseError("课程成绩只能是：" + "／".join(scoring.COURSE_STATUSES))
+        return text
     raise scoring.ParseError("未知字段")
 
 
@@ -227,11 +247,15 @@ def save_cells(db: Session, c: TeachingClass, sem: Semester, changes: list[dict]
         StandardSnapshot.semester_id == sem.id, StandardSnapshot.student_no.in_([e.student_no for e in enr.values()])))}
     results = []
     touched = set()
+    locked = pe_locked(c)
     for ch in changes:
         e = enr.get(ch["enrollment_id"])
         field = ch["field"]
         if e is None or field not in INPUT_FIELDS:
             results.append({**ch, "ok": False, "error": "行或字段不存在"})
+            continue
+        if locked and field in PE_FIELDS:
+            results.append({**ch, "ok": False, "error": PE_LOCKED_MSG})
             continue
         stu = stus.get(e.student_no)
         gender = stu.gender if stu else None
@@ -241,7 +265,7 @@ def save_cells(db: Session, c: TeachingClass, sem: Semester, changes: list[dict]
         except scoring.ParseError as ex:
             results.append({**ch, "ok": False, "error": str(ex)})
             continue
-        if field in ("a_status", "b_status") and val is None:
+        if field in ("a_status", "b_status", "course_status") and val is None:
             val = "正常"
         raw_field = field.replace("_status", "_raw")
         if field in ("a_raw", "b_raw") and val is not None and rec and (getattr(rec, field[0] + "_status") or "正常") != "正常":
@@ -249,10 +273,12 @@ def save_cells(db: Session, c: TeachingClass, sem: Semester, changes: list[dict]
             continue
         if rec is None:
             rec = ScoreRecord(enrollment_id=e.id, standard_version=sem.standard_version, computed={},
-                              a_status="正常", b_status="正常")
+                              a_status="正常", b_status="正常", course_status="正常")
             db.add(rec)
             recs[e.id] = rec
         old = getattr(rec, field)
+        if field == "course_status":
+            old = old or "正常"
         if old == val:
             results.append({**ch, "ok": True, "unchanged": True})
             continue
@@ -320,18 +346,20 @@ def preview_rows(db: Session, c: TeachingClass, sem: Semester, changes: list[dic
                                                         StandardSnapshot.student_no == e.student_no))
         rec = db.scalar(select(ScoreRecord).where(ScoreRecord.enrollment_id == eid))
         vals = {f: (getattr(rec, f) if rec else None) for f in INPUT_FIELDS}
-        for k in ("a_status", "b_status"):
+        for k in ("a_status", "b_status", "course_status"):
             vals[k] = vals[k] or "正常"
         gender = stu.gender if stu else None
         for ch in chs:
             f = ch.get("field")
-            if f not in INPUT_FIELDS:
+            if f not in INPUT_FIELDS or (pe_locked(c) and f in PE_FIELDS):
                 continue
             try:
                 v = parse_cell(f, ch.get("value"), cfg, gender)
             except scoring.ParseError as ex:
                 errors.append({"enrollment_id": eid, "field": f, "error": str(ex)})
                 continue
+            if f == "course_status":
+                v = v or "正常"
             if f in ("a_status", "b_status"):
                 v = v or "正常"
                 if v != "正常":
@@ -371,6 +399,7 @@ def recompute_students(db: Session, sem: Semester, nos: set[str]):
 # ---------------------------------------------------------------- 提交前校验
 
 def submit_check(rows: list[dict], cfg: dict) -> dict:
+    """只有体测需要提交，校验只看两项体测；运动技能、平时成绩提交后照样能改，不在这里查。"""
     lists = defaultdict(list)
     for r in rows:
         who = f"{r['seq']}. {r['student_no']} {r['name']}"
@@ -380,10 +409,6 @@ def submit_check(rows: list[dict], cfg: dict) -> dict:
             v = r["values"]
             if v.get(f"{k}_status") == "正常" and v.get(f"{k}_raw") is None:
                 missing.append(r["display"][k]["item_label"] or slot.get("label", k))
-        if r["values"].get("skill") is None:
-            missing.append("运动技能评定")
-        if r["values"].get("regular") is None:
-            missing.append("平时成绩")
         if missing:
             lists["missing"].append(f"{who}：{'、'.join(missing)}")
         if r["pending"] or r["gender_code"] is None:
@@ -393,6 +418,34 @@ def submit_check(rows: list[dict], cfg: dict) -> dict:
                 lists["bonus"].append(f"{who}：{d['item_label']}加分{d['bonus']:g}超过上限")
         for s in r["sudden"]:
             lists["sudden"].append(f"{who}：{s}")
+    # 体测两项都要填了或标了特殊情况，且没有年级/性别待确认的学生
     return {"missing": lists["missing"], "pending": lists["pending"], "bonus": lists["bonus"],
             "sudden": lists["sudden"],
-            "blocking": bool(lists["pending"])}
+            "blocking": bool(lists["pending"]) or bool(lists["missing"])}
+
+
+def is_missing(r: dict) -> bool:
+    """与录入页“未录入”筛选一致：课程成绩标了特殊情况的只看两项体测。"""
+    v = r["values"]
+    miss = any(v.get(f"{k}_status") == "正常" and v.get(f"{k}_raw") is None for k in ("a", "b"))
+    if r.get("course_status", "正常") != "正常":
+        return miss
+    return miss or v.get("skill") is None or v.get("regular") is None
+
+
+def sort_rows(rows: list[dict], by: str) -> list[dict]:
+    """与录入页的排序选项一致（学号、姓名、总成绩、未录入在前），教师导出照网页顺序。"""
+    import re as _re
+
+    def no_key(r):
+        return [int(t) if t.isdigit() else t for t in _re.split(r"(\d+)", str(r["student_no"]))]
+    out = sorted(rows, key=no_key)
+    if by == "name":
+        out.sort(key=lambda r: str(r["name"]))
+    elif by == "cls":
+        out.sort(key=lambda r: [int(t) if t.isdigit() else t for t in _re.split(r"(\d+)", str(r["class_label"] or ""))])
+    elif by == "total":
+        out.sort(key=lambda r: -(r["total"] if r["total"] is not None else -1))
+    elif by == "missing":
+        out.sort(key=lambda r: not is_missing(r))
+    return out
