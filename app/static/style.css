@@ -68,7 +68,9 @@ table.grid td.in.ro input{color:#999}
 .modal{position:fixed;inset:0;background:#0006;display:flex;align-items:flex-start;justify-content:center;z-index:50;padding:40px 10px;overflow:auto}
 .modal-box{background:#fff;border-radius:8px;min-width:360px;max-width:min(980px,96vw);padding:20px 22px;position:relative}
 .modal-close{position:absolute;right:10px;top:8px;border:none;background:none;font-size:22px;color:#888}
-.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:8px 18px;border-radius:6px;z-index:60;max-width:80vw}
+/* 操作提示显示在顶栏（52px）下方居中，z-index 高于弹窗（50） */
+.toast{position:fixed;top:64px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:8px 18px;border-radius:6px;z-index:60;max-width:min(80vw,640px);box-shadow:0 4px 14px #0003;text-align:center;animation:toast-in .18s ease-out}
+@keyframes toast-in{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}
 .toast.err{background:var(--err)}
 .std-table{border-collapse:collapse;font-size:12px}.std-table td,.std-table th{border:1px solid var(--line);padding:3px 8px;text-align:center}
 .std-table tr.hit td{background:#fff3c4;font-weight:600}
