@@ -366,6 +366,7 @@ function renderRows(C) {
   const tb = $("#grid tbody");
   updateExcellence(C);
   tb.innerHTML = sortedRows(C).filter((r) => rowVisible(C, r)).map((r, i) => rowHtml(C, r, i + 1)).join("") || `<tr><td colspan="24" class="muted" style="padding:20px">没有符合条件的学生</td></tr>`;
+  stickGridHead();
 }
 function rowHtml(C, r, no) {
   const ed = C.d.editable;
@@ -375,6 +376,10 @@ function rowHtml(C, r, no) {
     const key = `${r.enrollment_id}:${field}`; const err = C.errors.get(key);
     if (slot && v[`${k}_status`] !== "正常") {
       return `<td class="in ro"><div class="seg st-only" data-e="${r.enrollment_id}" data-f="${field}"><button class="link stTag" data-e="${r.enrollment_id}" title="点击修改特殊情况">${esc(v[`${k}_status`])}</button></div></td>`;
+    }
+    // 课程成绩标了缓考、缺考、退课：技能和平时两格不再录入，显示状态，点开「更多」
+    if (!slot && r.course_status && r.course_status !== "正常") {
+      return `<td class="in ro"><div class="seg st-only" data-e="${r.enrollment_id}" data-f="${field}"><button class="link stTag" data-e="${r.enrollment_id}" title="课程成绩${esc(r.course_status)}，点击修改">${esc(r.course_status)}</button></div></td>`;
     }
     const ro = !ed || (slot && (!r.gender_code || C.d.pe_locked));
     const pend = C.queue.get(key);
@@ -512,6 +517,18 @@ function commitSeg(C, seg) {
   seg.dataset.orig = val;
 }
 
+/* 录入表随整页滚动；外框只管横向滚动，表头靠位移贴在顶栏下方 */
+function stickGridHead() {
+  const wrap = $(".grid-wrap"); const head = wrap && $("#grid thead");
+  if (!head) return;
+  const bar = $(".topbar"); const top = bar ? bar.getBoundingClientRect().bottom : 0;
+  const box = wrap.getBoundingClientRect();
+  const y = Math.max(0, Math.min(top - box.top, box.height - head.offsetHeight));
+  wrap.style.setProperty("--head-y", `${y}px`);
+}
+window.addEventListener("scroll", stickGridHead, { passive: true });
+window.addEventListener("resize", stickGridHead);
+
 function bindClass(C) {
   const grid = $("#grid");
   grid.addEventListener("focusin", (e) => {
@@ -629,7 +646,16 @@ async function rowMenu(C, eid) {
   const courseSel = `<label>课程成绩 <select data-st="course_status" ${ed ? "" : "disabled"}>${(C.d.course_statuses || ["正常"]).map((s) => `<option value="${s}" ${(r.course_status || "正常") === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>`;
   const showNote = ["作弊", "违纪"].includes(r.values.a_status) || ["作弊", "违纪"].includes(r.values.b_status) || !!r.values.note;
   const lockInfo = peLock ? "体测成绩已提交，性别和标准档不能再改" : "";
-  const pendingLine = st.pending ? `<div class="notice" style="margin:6px 0">这名学生的年级或性别待确认：${esc((st.reasons || []).join("；"))}。核对后在下面改好性别和标准档并保存，体测即可提交。</div>` : "";
+  // 待确认的项标红：按原因分到性别或标准档，分不出的两项都标
+  const reasons = st.reasons || [];
+  const isGenderReason = (x) => x.startsWith("学生基础数据") || x.startsWith("无对应学籍");
+  const isBandReason = (x) => /学号|年级|特殊学籍/.test(x);
+  const unknownReason = st.pending && (!reasons.length || reasons.some((x) => !isGenderReason(x) && !isBandReason(x)));
+  const genderBad = !stu.gender || (st.pending && (reasons.some(isGenderReason) || unknownReason));
+  const bandBad = !st.band || (st.pending && (reasons.some(isBandReason) || unknownReason));
+  const badWhat = [genderBad && "性别", bandBad && "标准档"].filter(Boolean).join("和");
+  const pendingLine = genderBad || bandBad ? `<div class="notice err" style="margin:6px 0">这名学生的${badWhat}待确认${reasons.length ? `：${esc(reasons.join("；"))}` : ""}。${peLock ? "体测成绩已提交，要改须先申请撤回，体育部解锁后再在下面改好标红的项并保存。" : "核对后在下面改好标红的项并保存，体测即可提交。"}</div>` : "";
+  const bad = (b) => (b ? ' class="pending-bad"' : "");
   const hist = h.history || [];
   modal(`<h3>${esc(r.student_no)} ${esc(r.name)}</h3>
     <h4>特殊情况</h4><div class="row">${stSel("a")}${stSel("b")}${courseSel}</div>
@@ -637,9 +663,9 @@ async function rowMenu(C, eid) {
     <h4>学生信息</h4>${pendingLine}
     <div class="map-grid" style="max-width:none;grid-template-columns:70px 1fr 70px 1fr">
       <div>姓名</div><div><input type="text" id="siName" value="${esc(stu.name || r.name)}" ${ed ? "" : "disabled"}></div>
-      <div>性别</div><div><select id="siGender" ${ed && !peLock ? "" : "disabled"}><option value="">待确认</option><option value="M" ${stu.gender === "M" ? "selected" : ""}>男</option><option value="F" ${stu.gender === "F" ? "selected" : ""}>女</option></select></div>
+      <div${bad(genderBad)}>性别</div><div${bad(genderBad)}><select id="siGender" ${ed && !peLock ? "" : "disabled"}><option value="">待确认</option><option value="M" ${stu.gender === "M" ? "selected" : ""}>男</option><option value="F" ${stu.gender === "F" ? "selected" : ""}>女</option></select></div>
       <div>学院</div><div><input type="text" id="siCollege" value="${esc(stu.college || r.college || "")}" ${ed ? "" : "disabled"}></div>
-      <div>标准档</div><div><select id="siBand" ${ed && !peLock ? "" : "disabled"}>${st.band ? "" : '<option value="">待确认</option>'}<option value="12" ${st.band === "12" ? "selected" : ""}>大一大二</option><option value="34" ${st.band === "34" ? "selected" : ""}>大三大四</option></select></div></div>
+      <div${bad(bandBad)}>标准档</div><div${bad(bandBad)}><select id="siBand" ${ed && !peLock ? "" : "disabled"}>${st.band ? "" : '<option value="">待确认</option>'}<option value="12" ${st.band === "12" ? "selected" : ""}>大一大二</option><option value="34" ${st.band === "34" ? "selected" : ""}>大三大四</option></select></div></div>
     ${ed ? `<div class="row" style="margin-top:6px"><span class="muted small">保存即生效。姓名、性别、学院是全校共用的学生信息，别的班也会跟着变；改性别或标准档会立即重算体测得分。${lockInfo}</span><span class="spacer"></span><button id="siSave">保存学生信息</button></div>` : ""}
     <h4>其他问题</h4>
     ${issue.note ? `<p class="small">已提交：${esc(issue.note)} <span class="tag ${issue.resolved ? "s-已提交" : "warn"}">${issue.resolved ? `体育部已处理${issue.resolved_at ? " " + esc(issue.resolved_at) : ""}` : "待体育部处理"}</span></p>` : ""}
