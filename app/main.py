@@ -1047,11 +1047,16 @@ def review_unlock(rid: int, approve: bool = Body(...), note: str = Body(""), u: 
 
 
 @app.get("/api/admin/logs")
-def list_logs(semester_id: int | None = None, action: str = "", actor: str = "", page: int = 1,
+def list_logs(semester_id: str = "", action: str = "", actor: str = "", page: int = 1,
               u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    # semester_id 留空 = 全部学期（还没建学期时前端可能传空串，不能 422）。
+    # 指定学期时连同不属于任何学期的记录（登录、账号等）一起列出，否则这些记录永远看不到。
+    semester_id = semester_id.strip()
+    if semester_id and not semester_id.isdigit():
+        raise HTTPException(400, "学期参数有误")
     q = select(AuditLog)
     if semester_id:
-        q = q.where(AuditLog.semester_id == semester_id)
+        q = q.where((AuditLog.semester_id == int(semester_id)) | AuditLog.semester_id.is_(None))
     if action:
         q = q.where(AuditLog.action == action)
     if actor:

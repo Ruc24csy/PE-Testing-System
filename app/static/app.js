@@ -16,9 +16,20 @@ async function api(path, opts = {}) {
   const data = ct.includes("json") ? await r.json() : await r.blob();
   if (!r.ok) {
     if (r.status === 403 && data.detail === "首次登录请先修改初始口令") location.hash = "#/password";
-    throw new Error((data && data.detail) || `请求失败（${r.status}）`);
+    throw new Error(errText(data && data.detail, r.status));
   }
   return data;
+}
+/* 后端报错转成一句可读的话：detail 可能是字符串，也可能是 FastAPI 参数校验（422）给的数组或对象 */
+function errText(detail, status) {
+  if (typeof detail === "string" && detail) return detail;
+  if (status === 422 || Array.isArray(detail)) {
+    const fields = (Array.isArray(detail) ? detail : [])
+      .map((x) => (x && Array.isArray(x.loc) ? x.loc[x.loc.length - 1] : "")).filter((x) => typeof x === "string" && x);
+    return `请求参数有误（${status}）${fields.length ? "：" + [...new Set(fields)].join("、") : ""}，请刷新页面重试`;
+  }
+  if (detail && typeof detail === "object" && typeof detail.msg === "string") return detail.msg;
+  return `请求失败（${status}）`;
 }
 
 function toast(msg, err = false) {
@@ -37,7 +48,7 @@ async function download(path, body) {
   try {
     const r = await fetch(path, body === undefined ? { credentials: "same-origin" } :
       { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "下载失败"); }
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(errText(d.detail, r.status)); }
     const cd = r.headers.get("content-disposition") || "";
     const m = cd.match(/filename\*=UTF-8''([^;]+)/);
     const name = m ? decodeURIComponent(m[1]) : "下载.xlsx";
@@ -913,12 +924,16 @@ async function adUnlock(el) {
 async function adLogs(el, page = 1) {
   const sem = curSem();
   const action = el.dataset.action || "";
-  const d = await api(`/api/admin/logs?semester_id=${sem ? sem.id : ""}&action=${encodeURIComponent(action)}&page=${page}`);
-  el.innerHTML = `<div class="row"><select id="lgAct"><option value="">全部操作</option>${["保存", "提交", "撤回申请", "撤回审核", "改档", "导入", "导出", "配置", "回退导入", "指定教师", "学期设置", "登录"].map((a) => `<option ${a === action ? "selected" : ""}>${a}</option>`).join("")}</select><span class="muted">共 ${d.total} 条</span>
+  const onlySem = !!sem && el.dataset.scope === "sem";
+  const qs = new URLSearchParams({ action, page });
+  if (onlySem) qs.set("semester_id", sem.id);
+  const d = await api(`/api/admin/logs?${qs}`);
+  el.innerHTML = `<div class="row"><select id="lgScope"><option value="">全部学期</option>${sem ? `<option value="sem" ${onlySem ? "selected" : ""}>${esc(sem.name)}（含登录等通用记录）</option>` : ""}</select><select id="lgAct"><option value="">全部操作</option>${["保存", "提交", "撤回申请", "撤回审核", "改档", "导入", "导出", "配置", "回退导入", "指定教师", "学期设置", "登录"].map((a) => `<option ${a === action ? "selected" : ""}>${a}</option>`).join("")}</select><span class="muted">共 ${d.total} 条</span>
     <span class="spacer"></span>${page > 1 ? '<button id="lgPrev">上一页</button>' : ""}${d.total > page * 100 ? '<button id="lgNext">下一页</button>' : ""}</div>
     <table class="list small" style="margin-top:10px"><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>详情</th><th>IP</th></tr>
     ${d.logs.map((l) => `<tr><td>${esc(l.at)}</td><td>${esc(l.actor_name)} ${esc(l.actor)}</td><td>${esc(l.action)}</td><td>${esc(l.target)}</td><td style="max-width:520px;word-break:break-all">${esc(JSON.stringify(l.detail)).slice(0, 400)}</td><td>${esc(l.ip)}</td></tr>`).join("")}</table>`;
   $("#lgAct").onchange = (e) => { el.dataset.action = e.target.value; adLogs(el, 1); };
+  $("#lgScope").onchange = (e) => { el.dataset.scope = e.target.value; adLogs(el, 1); };
   if ($("#lgPrev")) $("#lgPrev").onclick = () => adLogs(el, page - 1);
   if ($("#lgNext")) $("#lgNext").onclick = () => adLogs(el, page + 1);
 }
