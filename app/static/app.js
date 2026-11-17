@@ -809,11 +809,10 @@ async function adOverview(el) {
   };
   if ($("#ovBody")) {
     drawOv(); $("#ovOnly").onchange = drawOv;
-    $("#ovBody").onclick = async (e) => {
+    $("#ovBody").onclick = (e) => {
       const b = e.target.closest("[data-assign]"); if (!b) return;
-      const no = prompt("指定给哪个工号？（教师工号或公共账号的工号）"); if (!no || !no.trim()) return;
-      const name = prompt("教师姓名（可留空）") ?? "";
-      try { await api(`/api/admin/classes/${b.dataset.assign}`, { method: "PATCH", body: { staff_no: no.trim(), teacher_name: name.trim() } }); toast("已指定"); adOverview(el); } catch (err) { toast(err.message, true); }
+      const c = o.class_list.find((x) => String(x.id) === b.dataset.assign);
+      assignTeacher(c, () => adOverview(el));
     };
   }
   sessionStorage.setItem("classFilter", JSON.stringify({ scope: "all" }));
@@ -926,7 +925,7 @@ async function adPending(el) {
     <table class="list" style="margin-top:10px"><thead><tr><th>学号</th><th>姓名</th><th>性别</th><th>暂定标准档</th><th>原因</th><th>选课记录</th><th>操作</th></tr></thead><tbody id="pBody"></tbody></table>
     <h3>教师待补的教学班（${d.teacher_pending.length}）</h3>
     ${d.teacher_pending.length ? `<table class="list"><tr><th>教学班</th><th>当前教师</th><th>指定责任教师</th></tr>${d.teacher_pending.map((c) => `<tr><td>${esc(c.class_name)}（${esc(c.class_no)}）</td><td>${esc(c.teacher_name || "—")}</td>
-      <td><input type="text" placeholder="工号" size="10" data-tno="${c.id}"> <input type="text" placeholder="姓名" size="8" data-tname="${c.id}"> <button data-tset="${c.id}">指定</button></td></tr>`).join("")}</table>` : "<p class='muted'>无</p>"}`;
+      <td><button data-tset="${c.id}">选择教师</button></td></tr>`).join("")}</table>` : "<p class='muted'>无</p>"}`;
   const draw = () => {
     const q = $("#pSearch").value.trim();
     $("#pBody").innerHTML = d.students.filter((s) => !q || (s.student_no + s.name + s.reasons.join("")).includes(q)).map((s) => `<tr>
@@ -940,7 +939,30 @@ async function adPending(el) {
   $("#pSearch").oninput = draw; draw();
   $$("[data-edit2]", el).forEach((b) => (b.onclick = () => studentEditor(sem, b.dataset.edit2, () => adPending(el))));
   $$("[data-resolve]", el).forEach((b) => (b.onclick = async () => { try { await api(`/api/admin/enrollments/${b.dataset.resolve}/issue-resolved`, { method: "POST", body: { resolved: b.dataset.v === "1" } }); adPending(el); } catch (e) { toast(e.message, true); } }));
-  $$("[data-tset]", el).forEach((b) => (b.onclick = async () => { try { await api(`/api/admin/classes/${b.dataset.tset}`, { method: "PATCH", body: { staff_no: $(`[data-tno="${b.dataset.tset}"]`).value, teacher_name: $(`[data-tname="${b.dataset.tset}"]`).value } }); toast("已指定"); adPending(el); } catch (e) { toast(e.message, true); } }));
+  $$("[data-tset]", el).forEach((b) => (b.onclick = () => assignTeacher(d.teacher_pending.find((c) => String(c.id) === b.dataset.tset), () => adPending(el))));
+}
+// 指定教师：从平台已有账号（教师和公共账号）里选。学号（10位）的学生管理员不列出。
+async function assignTeacher(c, done) {
+  let us;
+  try { us = (await api("/api/admin/users")).filter((u) => !/^\d{10}$/.test(u.staff_no)); } catch (e) { toast(e.message, true); return; }
+  modal(`<h3>指定教师：${esc(c.class_name)}（${esc(c.class_no)}）</h3>
+    <p class="muted small">当前：${esc(c.teacher_name || "教师待补")}${c.staff_no ? `（${esc(c.staff_no)}）` : ""}。课程安排表里出现过的教师都在列表里，没有数智人大身份的老师请先在“账号”页新建公共账号。</p>
+    <div class="row"><input type="text" id="atQ" placeholder="按工号或姓名搜索" size="24"></div>
+    <div style="max-height:50vh;overflow:auto;margin-top:8px"><table class="list"><thead><tr><th>工号</th><th>姓名</th><th>类型</th><th></th></tr></thead><tbody id="atBody"></tbody></table></div>`, (m) => {
+    const draw = () => {
+      const q = $("#atQ", m).value.trim().toLowerCase();
+      const hit = us.filter((u) => !q || (u.staff_no + " " + (u.name || "")).toLowerCase().includes(q));
+      $("#atBody", m).innerHTML = hit.slice(0, 200).map((u) => `<tr><td>${esc(u.staff_no)}</td><td>${esc(u.name || "")}</td><td>${u.is_public ? "公共账号" : u.is_admin ? "体育部管理员" : "教师"}</td>
+        <td>${u.staff_no === c.staff_no ? '<span class="muted small">当前</span>' : `<button class="link" data-pick="${esc(u.staff_no)}">选这位</button>`}</td></tr>`).join("")
+        || `<tr><td colspan="4" class="muted">没有匹配的账号</td></tr>`;
+    };
+    $("#atQ", m).oninput = draw; draw(); $("#atQ", m).focus();
+    $("#atBody", m).onclick = async (e) => {
+      const b = e.target.closest("[data-pick]"); if (!b) return;
+      try { await api(`/api/admin/classes/${c.id}`, { method: "PATCH", body: { staff_no: b.dataset.pick } }); closeModal(); toast("已指定"); done(); }
+      catch (err) { toast(err.message, true); }
+    };
+  });
 }
 async function adStudents(el) {
   const sem = curSem(); if (!sem) return;
@@ -1058,9 +1080,11 @@ async function adUsers(el) {
     ${pubs.length ? `<table class="list" style="margin-top:10px"><tr><th>工号</th><th>名称</th><th>口令</th><th></th></tr>${pubs.map((u) => `<tr><td>${esc(u.staff_no)}</td><td>${esc(u.name)}</td><td>${u.must_change_password ? '<span class="tag warn">初始口令，未改</span>' : "已设置"}</td>
       <td><button class="link" data-reset="${esc(u.staff_no)}">重置口令</button></td></tr>`).join("")}</table>` : `<p class="muted small">还没有公共账号。</p>`}
     <h3>账号</h3>
-    <p class="muted small">教师用数智人大统一身份认证登录，首次登录后出现在这里。</p>
-    <div class="row"><input type="text" id="uNo" placeholder="工号"><button id="uAdd">设为管理员</button></div>
-    <table class="list" style="margin-top:10px"><tr><th>工号</th><th>姓名</th><th>角色</th><th></th></tr>${others.map((u) => `<tr><td>${esc(u.staff_no)}</td><td>${esc(u.name)}</td><td>${u.is_admin ? "体育部管理员" : "教师"}</td>
+    <p class="muted small">教师用数智人大统一身份认证登录；导入课程安排表时，表里的教师也会出现在这里。</p>
+    <h3>添加学生管理员</h3>
+    <p class="muted small">输入学生的10位学号，设为体育部管理员。学生管理员可以用数智人大统一身份认证登录（普通学生不能登录）。也可以输入平台里已有的8位教师工号，把这位老师设为管理员。</p>
+    <div class="row"><input type="text" id="uNo" placeholder="10位学号" inputmode="numeric" maxlength="10"><button id="uAdd">添加学生管理员</button></div>
+    <table class="list" style="margin-top:10px"><tr><th>工号</th><th>姓名</th><th>角色</th><th></th></tr>${others.map((u) => `<tr><td>${esc(u.staff_no)}</td><td>${esc(u.name)}</td><td>${u.is_admin ? (/^\d{10}$/.test(u.staff_no) ? "学生管理员" : "体育部管理员") : "教师"}</td>
       <td>${u.is_admin ? `<button class="link" data-rm="${esc(u.staff_no)}">取消管理员</button>` : `<button class="link" data-add="${esc(u.staff_no)}">设为管理员</button>`}</td></tr>`).join("")}</table>`;
   const set = async (no, v) => { try { await api(`/api/admin/users/${encodeURIComponent(no)}`, { method: "POST", body: { is_admin: v } }); adUsers(el); } catch (e) { toast(e.message, true); } };
   const showPw = (r, title) => modal(`<h3>${esc(title)}</h3><div class="kv"><div>工号</div><div>${esc(r.staff_no)}</div><div>初始口令</div><div><b style="font-family:monospace;font-size:18px">${esc(r.password)}</b></div></div>
@@ -1074,7 +1098,13 @@ async function adUsers(el) {
     try { const r = await api(`/api/admin/public-accounts/${encodeURIComponent(b.dataset.reset)}/reset`, { method: "POST" }); await adUsers(el); showPw(r, "口令已重置"); }
     catch (e) { toast(e.message, true); }
   }));
-  $("#uAdd").onclick = () => set($("#uNo").value.trim(), true);
+  $("#uAdd").onclick = () => {
+    const no = $("#uNo").value.trim(), have = us.find((u) => u.staff_no === no);
+    if (/^\d{8}$/.test(no) && !have) { toast(`平台里没有工号为 ${no} 的教师账号，不能设为管理员`, true); return; }
+    if (!have && !/^\d{10}$/.test(no)) { toast("请输入10位学号，或平台里已有的8位教师工号", true); return; }
+    if (have && have.is_public) { toast("公共账号不能设为管理员", true); return; }
+    set(no, true);
+  };
   $$("[data-rm]", el).forEach((b) => (b.onclick = () => set(b.dataset.rm, false)));
   $$("[data-add]", el).forEach((b) => (b.onclick = () => set(b.dataset.add, true)));
 }

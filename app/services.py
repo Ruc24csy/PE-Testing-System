@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from collections import defaultdict
 
 from sqlalchemy import select
@@ -13,6 +14,19 @@ from .models import (AuditLog, Enrollment, ScoreHistory, ScoreRecord, Semester, 
 
 EXCELLENT_LINE = 89.5  # 总评四舍五入后≥90分即为优秀
 EXCELLENT_WARN = 0.30  # 班级优秀率超过30%提醒
+
+
+def _natural(text: str) -> list:
+    """按数字分段：数字段按数值比较（前导零不影响），其余按文字比较。"""
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", text)]
+
+
+def class_sort_key(c: TeachingClass) -> tuple:
+    """教学班的统一顺序：按课程分组，组内按班名自然排序。
+    班名写法不统一（乒乓球1 / 乒乓球10班 / 五禽戏04班），去掉“班”字、数字按大小比，
+    得到 乒乓球1、2…9、10班；五禽戏1、2、04班、05班。同名再按教学班号。"""
+    name = (c.class_name or "").replace("班", "").strip()
+    return (_natural(c.course_name or ""), _natural(name), _natural(c.class_no or ""))
 
 
 def is_excellent(total) -> bool:
