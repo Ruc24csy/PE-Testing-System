@@ -319,8 +319,8 @@ def list_classes(sid: int, course: str = "", campus: str = "", scope: str = "min
             if services.is_excellent((comp or {}).get("total")):
                 excellent[cid] = excellent.get(cid, 0) + 1
 
-    # 按教学班名称排序，同名再按教学班号（教师“我的教学班”和管理端全部班列表一致）
-    classes.sort(key=lambda c: (c.class_name or "", c.class_no or ""))
+    # 按课程分组、班名自然排序（教师“我的教学班”和管理端全部班列表一致）
+    classes.sort(key=services.class_sort_key)
     all_courses = sorted(set(db.scalars(select(TeachingClass.course_name).where(TeachingClass.semester_id == sid))))
     has_any = db.scalar(select(func.count()).select_from(TeachingClass).where(TeachingClass.semester_id == sid)) > 0
     return {"semester": sem_dict(sem), "imported": has_any, "courses": all_courses,
@@ -831,8 +831,8 @@ def pending_list(sid: int, u: User = Depends(admin_user), db: Session = Depends(
                     "enrollments": es})
     out.sort(key=lambda x: x["student_no"])
     reasons = Counter(r.split("（")[0] for x in out for r in x["reasons"])
-    teacher_pending = [class_brief(c) for c in db.scalars(select(TeachingClass).where(
-        TeachingClass.semester_id == sid, TeachingClass.teacher_pending.is_(True)))]
+    teacher_pending = [class_brief(c) for c in sorted(db.scalars(select(TeachingClass).where(
+        TeachingClass.semester_id == sid, TeachingClass.teacher_pending.is_(True))), key=services.class_sort_key)]
     info_errors = [{"enrollment_id": e.id, "student_no": e.student_no, "name": e.name, "class_name": c.class_name,
                     "teacher": c.teacher_name, "note": e.info_error, "resolved": bool(e.info_error_resolved)}
                    for e, c in db.execute(select(Enrollment, TeachingClass).join(
@@ -982,8 +982,8 @@ def student_detail(sid: int, no: str, u: User = Depends(admin_user), db: Session
     snap = db.scalar(select(StandardSnapshot).where(StandardSnapshot.semester_id == sid,
                                                     StandardSnapshot.student_no == no))
     classes = [{"id": c.id, "label": f"{c.course_name} · {c.class_name}（{c.teacher_name or '教师待补'}）{c.class_no}"}
-               for c in db.scalars(select(TeachingClass).where(TeachingClass.semester_id == sid)
-                                   .order_by(TeachingClass.course_name, TeachingClass.class_name))]
+               for c in sorted(db.scalars(select(TeachingClass).where(TeachingClass.semester_id == sid)),
+                               key=services.class_sort_key)]
     return {"student_no": no, "student": _student_dict(db.get(Student, no)), "standard": _snap_dict(snap),
             "enrollments": [_enroll_dict(e, c) for e, c in es], "classes": classes}
 
@@ -1149,11 +1149,12 @@ def admin_update_class(cid: int, body: dict = Body(...), u: User = Depends(admin
         raise HTTPException(404)
     old = {"staff_no": c.staff_no, "teacher_name": c.teacher_name}
     if "staff_no" in body:
-        c.staff_no = str(body["staff_no"]).strip()
-        c.teacher_name = str(body.get("teacher_name") or c.teacher_name).strip()
-        c.teacher_pending = not c.staff_no
-        if c.staff_no:
-            auth.ensure_user(db, c.staff_no, c.teacher_name)
+        # 只能从平台已有账号（含公共账号）里选，不再手填工号姓名临时建账号
+        staff_no = str(body["staff_no"] or "").strip()
+        x = db.get(User, staff_no) if staff_no else None
+        if not x:
+            raise HTTPException(400, f"平台里没有工号为 {staff_no} 的账号，请从账号列表中选择" if staff_no else "请选择教师")
+        c.staff_no, c.teacher_name, c.teacher_pending = x.staff_no, x.name or c.teacher_name, False
     services.log(db, u.staff_no, "指定教师", f"{c.class_no} {c.class_name}", c.semester_id, old=old, new=body)
     db.commit()
     return class_brief(c)
@@ -1212,8 +1213,8 @@ def list_logs(semester_id: str = "", action: str = "", actor: str = "", page: in
 @app.get("/api/admin/semesters/{sid}/export")
 def export_semester(sid: int, request: Request, u: User = Depends(admin_user), db: Session = Depends(get_db)):
     sem = _sem(db, sid)
-    classes = db.scalars(select(TeachingClass).where(TeachingClass.semester_id == sid)
-                         .order_by(TeachingClass.course_name, TeachingClass.class_no)).all()
+    classes = sorted(db.scalars(select(TeachingClass).where(TeachingClass.semester_id == sid)),
+                     key=services.class_sort_key)
     sections = [(c, services.load_class_rows(db, c, sem), services.class_config(c, sem)) for c in classes]
     data = exporter.build_workbook(sem, sections, f"{u.name}({u.staff_no})")
     services.log(db, u.staff_no, "导出", f"{sem.name} 全部教学班", sid, ip=client_ip(request), classes=len(classes))
@@ -1238,12 +1239,12 @@ def semester_overview(sid: int, u: User = Depends(admin_user), db: Session = Dep
     sem = _sem(db, sid)
     st = dict(db.execute(select(TeachingClass.status, func.count()).where(TeachingClass.semester_id == sid)
                          .group_by(TeachingClass.status)).all())
-    cls = db.scalars(select(TeachingClass).where(TeachingClass.semester_id == sid)
-                     .order_by(TeachingClass.course_name, TeachingClass.class_no)).all()
+    cls = sorted(db.scalars(select(TeachingClass).where(TeachingClass.semester_id == sid)),
+                 key=services.class_sort_key)
     return {"semester": sem_dict(sem), "classes": sum(st.values()), "status": st,
             "pe_submitted": st.get("已提交", 0),
             "class_list": [{"id": c.id, "class_no": c.class_no, "course_name": c.course_name, "class_name": c.class_name,
-                            "teacher_name": c.teacher_name, "submitted": c.status == "已提交",
+                            "teacher_name": c.teacher_name, "staff_no": c.staff_no, "submitted": c.status == "已提交",
                             "submitted_at": c.submitted_at.strftime("%Y-%m-%d %H:%M") if c.submitted_at and c.status == "已提交" else None}
                            for c in cls],
             "teacher_edits": db.scalar(select(func.count()).select_from(AuditLog).where(
@@ -1304,9 +1305,19 @@ def reset_public_password(staff_no: str, request: Request, u: User = Depends(adm
 @app.post("/api/admin/users/{staff_no}")
 def set_admin(staff_no: str, is_admin_flag: bool = Body(..., embed=True, alias="is_admin"),
               u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    """设置或取消管理员。账号页“添加学生管理员”也走这里：输入10位学号即建账号并设为管理员，
+    管理员登录不受统一认证人员类别（只放行教职工）的限制。8位工号必须是平台里已有的账号。"""
+    staff_no = staff_no.strip()
     existing = db.get(User, staff_no)
     if existing and existing.is_public and is_admin_flag:
         raise HTTPException(400, "公共账号不能设为管理员")
+    if not existing:
+        if not is_admin_flag:
+            raise HTTPException(404, "账号不存在")
+        if re.fullmatch(r"\d{8}", staff_no):
+            raise HTTPException(400, f"平台里没有工号为 {staff_no} 的教师账号，不能设为管理员")
+        if not re.fullmatch(r"\d{10}", staff_no):
+            raise HTTPException(400, "请输入10位学号，或平台里已有的8位教师工号")
     x = auth.ensure_user(db, staff_no)
     if x.staff_no == u.staff_no and not is_admin_flag:
         raise HTTPException(400, "不能取消自己的管理员身份")
