@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth, config, exporter, grading, importer, scoring, services
+from . import auth, config, exporter, grading, importer, score_import, scoring, services
 from .auth import admin_user, client_ip, current_user, get_db, is_admin
 from .models import (AuditLog, Enrollment, GradeCorrection, ScoreHistory, ScoreRecord, Semester, StandardSnapshot,
                      Student, TeachingClass, UnlockRequest, User, init_db, now)
@@ -803,6 +803,67 @@ def admin_import_commit(request: Request, body: dict = Body(...), u: User = Depe
                  warnings=[i["message"] for i in rep.items if i["level"] == "warn"][:50])
     db.commit()
     return {"ok": True, "result": result}
+
+
+# ---------------------------------------------------------------- 管理端：导入体测成绩（取最优）
+
+def _score_import_plan(db: Session, sem: Semester, token: str) -> dict:
+    ok, why = services.can_edit(None, sem)
+    if not ok:
+        raise HTTPException(403, why)
+    try:
+        entries, notes = score_import.read_entries(importer._path(token))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception:
+        raise HTTPException(400, "无法读取这个 Excel 文件")
+    p = score_import.plan(db, sem, entries)
+    p["notes"] = notes
+    return p
+
+
+@app.post("/api/admin/score-import/upload")
+async def score_import_upload(semester_id: int = Form(...), file: UploadFile = File(...),
+                              u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    """上传成绩表，返回预检：将更新哪些成绩、跳过哪些及原因。不写数据库。"""
+    sem = _sem(db, semester_id)
+    try:
+        token = importer.save_upload(await file.read(), file.filename or "x.xlsx")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    p = _score_import_plan(db, sem, token)
+    return {"token": token, **p}
+
+
+@app.post("/api/admin/score-import/commit")
+def score_import_commit(request: Request, semester_id: int = Body(...), token: str = Body(...),
+                        u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    """按上传的文件重新预检一遍再写入（预检之后有人改过成绩，以写入时为准）。"""
+    sem = _sem(db, semester_id)
+    p = _score_import_plan(db, sem, token)
+    batch = f"pe-{uuid.uuid4().hex[:12]}"
+    saved = score_import.commit(db, sem, p["updates"], u.staff_no, batch)
+    services.log(db, u.staff_no, "导入", "体测成绩", sem.id, ip=client_ip(request), batch=batch,
+                 updated=saved, students=p["students"], skipped=len(p["skips"]), reasons=p["reason_counts"])
+    db.commit()
+    return {"ok": True, "batch": batch, "saved": saved, "students": p["students"], "skipped": len(p["skips"])}
+
+
+@app.post("/api/admin/score-import/{batch}/revert")
+def score_import_revert(batch: str, request: Request, semester_id: int = Body(..., embed=True),
+                        u: User = Depends(admin_user), db: Session = Depends(get_db)):
+    sem = _sem(db, semester_id)
+    ok, why = services.can_edit(None, sem)
+    if not ok:
+        raise HTTPException(403, why)
+    if not re.fullmatch(r"pe-[0-9a-f]{12}", batch):
+        raise HTTPException(400)
+    n = services.revert_batch(db, sem, batch, u.staff_no)
+    if n is None:
+        raise HTTPException(404, "没有找到这次导入")
+    services.log(db, u.staff_no, "回退导入", "体测成绩", sem.id, ip=client_ip(request), batch=batch, reverted=n)
+    db.commit()
+    return {"ok": True, "reverted": n}
 
 
 # ================================================================= 管理端：待确认清单与标准档
