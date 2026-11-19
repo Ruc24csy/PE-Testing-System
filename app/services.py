@@ -462,3 +462,34 @@ def sort_rows(rows: list[dict], by: str) -> list[dict]:
     elif by == "missing":
         out.sort(key=lambda r: not is_missing(r))
     return out
+
+
+# ---------------------------------------------------------------- 回退一次跨班导入
+
+def revert_batch(db: Session, sem: Semester, batch: str, operator: str) -> int | None:
+    """把一次导入写入的格子改回导入前的值。导入后又被改过的格子、体测已提交班的体测成绩不动。
+    返回改回的格数；没有这次导入的记录时返回 None。"""
+    q = (select(ScoreHistory, Enrollment).join(Enrollment, Enrollment.id == ScoreHistory.enrollment_id)
+         .where(ScoreHistory.batch == batch, Enrollment.semester_id == sem.id).order_by(ScoreHistory.id.desc()))
+    hs = db.execute(q).all()
+    if not hs:
+        return None
+    n, classes = 0, set()
+    for h, e in hs:
+        c = db.get(TeachingClass, e.class_id)
+        if pe_locked(c) and h.field in PE_FIELDS:
+            continue
+        rec = db.scalar(select(ScoreRecord).where(ScoreRecord.enrollment_id == h.enrollment_id))
+        if rec is None or _s(getattr(rec, h.field)) != h.new:
+            continue
+        old = None if h.old is None else (float(h.old) if h.field.endswith("_raw") else h.old)
+        setattr(rec, h.field, old)
+        rec.updated_by, rec.updated_at = operator, now()
+        db.add(ScoreHistory(enrollment_id=h.enrollment_id, field=h.field, old=h.new, new=h.old, operator=operator,
+                            standard_version=rec.standard_version, computed={"reason": f"回退导入 {batch}"}))
+        n += 1
+        classes.add(c.id)
+    db.flush()
+    for cid in classes:
+        recompute_class(db, db.get(TeachingClass, cid), sem)
+    return n

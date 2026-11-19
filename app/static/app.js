@@ -780,7 +780,7 @@ function uploadDialog(C) {
 async function viewAdmin(tab) {
   if (!state.me.is_admin) { location.hash = "#/"; return; }
   tab = tab || "overview";
-  const tabs = [["overview", "概览"], ["semesters", "学期管理"], ["import", "课程信息导入"], ["pending", "待确认清单"], ["students", "学生信息"], ["unlock", "撤回审核"], ["logs", "操作日志"], ["users", "账号"]];
+  const tabs = [["overview", "概览"], ["semesters", "学期管理"], ["import", "信息导入"], ["pending", "待确认清单"], ["students", "学生信息"], ["unlock", "撤回审核"], ["logs", "操作日志"], ["users", "账号"]];
   $("#app").innerHTML = `<div class="card"><div class="tabs">${tabs.map(([k, l]) => `<a href="#/admin/${k}" class="${k === tab ? "on" : ""}">${l}</a>`).join("")}</div><div id="adminBody"></div></div>`;
   const fn = { overview: adOverview, semesters: adSemesters, import: adImport, pending: adPending, students: adStudents, unlock: adUnlock, logs: adLogs, users: adUsers }[tab];
   try { await fn($("#adminBody")); } catch (e) { $("#adminBody").innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
@@ -790,7 +790,7 @@ async function adOverview(el) {
   if (!sem) { el.innerHTML = `<div class="notice">还没有学期，请先到“学期管理”新建。</div>`; return; }
   const o = await api(`/api/admin/semesters/${sem.id}/overview`);
   el.innerHTML = `<h2>${esc(sem.name)}</h2>
-   ${!o.classes ? `<div class="notice">本学期课程信息尚未导入。请到“课程信息导入”依次导入学生基础数据表、课程安排表、学生选课表。</div>` : ""}
+   ${!o.classes ? `<div class="notice">本学期课程信息尚未导入。请到“信息导入”依次导入学生基础数据表、课程安排表、学生选课表。</div>` : ""}
    <div class="kv"><div>教学班</div><div>${o.classes}（未开始 ${o.status["未开始"] || 0}／录入中 ${o.status["录入中"] || 0}／体测成绩已提交 ${o.status["已提交"] || 0}）</div>
    <div>体测成绩已提交</div><div><b>${o.pe_submitted}</b> / ${o.classes} 个班</div>
    <div>有效选课记录</div><div>${o.enrollments}</div><div>待确认学生</div><div>${o.pending} <a href="#/admin/pending">去处理</a></div>
@@ -859,13 +859,48 @@ async function adImport(el) {
   const sem = curSem();
   if (!sem) { el.innerHTML = `<div class="notice">请先新建学期。</div>`; return; }
   el.innerHTML = `<p>导入到：<b>${esc(sem.name)}</b>（在顶部切换学期）。建议顺序：学生基础数据表 → 课程安排表 → 学生选课表。</p>
-    <div class="row"><select id="impKind"><option value="base">学生基础数据表（性别、院系补全）</option><option value="schedule">课程安排表</option><option value="enroll">学生选课表</option></select>
-    <input type="file" id="impFile" accept=".xlsx"></div><div id="impStep" style="margin-top:14px"></div>`;
+    <div class="row"><select id="impKind"><option value="base">学生基础数据表（性别、院系补全）</option><option value="schedule">课程安排表</option><option value="enroll">学生选课表</option><option value="scores">体测成绩（同一项目取最优）</option></select>
+    <input type="file" id="impFile" accept=".xlsx"></div><p id="impHint" class="muted small" hidden>每个工作表一个项目，表名写项目（如“立定跳远”“1000米”）；表名不是项目时按列名认。耐力跑写“分.秒”（3.24 即 3分24秒）。只写入学生本学期要测的项目；同一学生同一项目，表里多条和系统里已有的成绩一起比，取最好的，不会用更差的成绩盖掉已有成绩。体测已提交的班不改。</p><div id="impStep" style="margin-top:14px"></div>`;
+  $("#impKind").onchange = () => { $("#impHint").hidden = $("#impKind").value !== "scores"; $("#impFile").value = ""; $("#impStep").innerHTML = ""; };
   $("#impFile").onchange = async (e) => {
+    if ($("#impKind").value === "scores") return scoreImport(e.target.files[0], sem);
     const fd = new FormData(); fd.append("kind", $("#impKind").value); fd.append("file", e.target.files[0]);
     $("#impStep").innerHTML = `<p class="muted">正在解析文件…</p>`;
     try { const info = await api("/api/admin/import/upload", { method: "POST", body: fd }); impMapping(info, sem); }
     catch (err) { $("#impStep").innerHTML = `<div class="notice err">${esc(err.message)}</div>`; }
+  };
+}
+async function scoreImport(file, sem) {
+  const box = $("#impStep");
+  if (!file) return;
+  const fd = new FormData(); fd.append("semester_id", sem.id); fd.append("file", file);
+  box.innerHTML = `<p class="muted">正在解析文件…</p>`;
+  let r;
+  try { r = await api("/api/admin/score-import/upload", { method: "POST", body: fd }); }
+  catch (err) { box.innerHTML = `<div class="notice err">${esc(err.message)}</div>`; return; }
+  const reasons = Object.entries(r.reason_counts).map(([k, v]) => `${esc(k)} ${v} 条`).join("；");
+  const up = r.updates, sk = r.skips;
+  box.innerHTML = `<h3>预检结果</h3>
+    ${r.notes.length ? `<div class="notice">${r.notes.map(esc).join("<br>")}</div>` : ""}
+    <p>表里共 ${r.entries} 个成绩。将更新 <b>${up.length}</b> 项（${r.students} 名学生），跳过 <b>${sk.length}</b> 项${reasons ? `：${reasons}` : ""}。</p>
+    ${up.length ? `<details open><summary>将更新的成绩（${up.length}）</summary><table class="list" style="margin-top:6px"><thead><tr><th>教学班</th><th>学号</th><th>姓名</th><th>项目</th><th>原成绩</th><th>新成绩</th><th>来源</th></tr></thead><tbody>
+      ${up.slice(0, 500).map((u) => `<tr><td>${esc(u.class)}</td><td>${esc(u.student_no)}</td><td>${esc(u.name)}</td><td>${esc(u.item_label)}</td><td>${esc(u.old) || '<span class="muted">空</span>'}</td><td><b>${esc(u.new)}</b></td><td class="small muted">${esc(u.sheet)} 第${u.row}行</td></tr>`).join("")}</tbody></table>${up.length > 500 ? `<p class="muted small">只列前 500 项</p>` : ""}</details>` : ""}
+    ${sk.length ? `<details ${up.length ? "" : "open"}><summary>跳过的成绩（${sk.length}）</summary><table class="list" style="margin-top:6px"><thead><tr><th>来源</th><th>学号</th><th>姓名</th><th>项目</th><th>表里的值</th><th>原因</th></tr></thead><tbody>
+      ${sk.slice(0, 500).map((x) => `<tr><td class="small">${esc(x.sheet)} 第${x.row}行</td><td>${esc(x.student_no)}</td><td>${esc(x.name)}</td><td>${esc(x.item_label)}</td><td>${esc(x.value)}</td><td>${esc(x.reason)}${x.class ? `<span class="muted small">（${esc(x.class)}）</span>` : ""}</td></tr>`).join("")}</tbody></table>${sk.length > 500 ? `<p class="muted small">只列前 500 项</p>` : ""}</details>` : ""}
+    <div class="row" style="margin-top:12px"><button class="primary" id="scGo" ${up.length ? "" : "disabled"}>确认写入 ${up.length} 项</button></div><div id="scRes"></div>`;
+  if (!up.length) return;
+  $("#scGo").onclick = async () => {
+    $("#scGo").disabled = true;
+    try {
+      const res = await api("/api/admin/score-import/commit", { method: "POST", body: { semester_id: sem.id, token: r.token } });
+      $("#scRes").innerHTML = `<div class="notice info">已写入 ${res.saved} 项成绩（${res.students} 名学生），跳过 ${res.skipped} 项。修改记录里能看到是这次导入写入的。 <button id="scUndo">回退这次导入</button></div>`;
+      toast("导入完成");
+      $("#scUndo").onclick = async () => {
+        if (!confirm("把这次导入写入的成绩改回导入前的值？导入后又被改过的成绩不动。")) return;
+        try { const rv = await api(`/api/admin/score-import/${res.batch}/revert`, { method: "POST", body: { semester_id: sem.id } }); toast(`已回退 ${rv.reverted} 项`); $("#scUndo").disabled = true; }
+        catch (e) { toast(e.message, true); }
+      };
+    } catch (e) { $("#scGo").disabled = false; toast(e.message, true); }
   };
 }
 function impMapping(info, sem) {
