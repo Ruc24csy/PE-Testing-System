@@ -587,7 +587,8 @@ def export_class(cid: int, request: Request, sort: str = "no", u: User = Depends
 @app.get("/api/classes/{cid}/template")
 def class_template(cid: int, u: User = Depends(current_user), db: Session = Depends(get_db)):
     c, sem = _class(db, cid, u)
-    rows = services.load_class_rows(db, c, sem)
+    # 模板按学号升序，与网页录入表默认顺序一致；不受选课表导入行序和后续补录顺序影响
+    rows = services.sort_rows(services.load_class_rows(db, c, sem), "no")
     return _xlsx(exporter.build_template(sem, c, rows, services.class_config(c, sem)),
                  f"{c.class_name}-成绩录入模板.xlsx")
 

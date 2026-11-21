@@ -394,3 +394,36 @@ def test_create_semester_validation(admin, teacher):
         r = admin.post("/api/admin/semesters", json=bad)
         assert r.status_code == 400, bad
     assert admin.post("/api/admin/semesters", json={"start_year": "2027", "season": "fall"}).json()["code"] == "2027-2028-1"
+
+
+def test_class_template_sorted_by_student_no(admin, teacher):
+    """录入模板按学号升序，与选课表导入行序、后补学生无关。"""
+    sem = admin.post("/api/admin/semesters", json={"start_year": 2028, "season": "fall"}).json()
+    sid_new = sem["id"]
+    # 选课表故意不按学号写：2028...9、2028...2、2028...11、2028...100
+    nos = ["2028200009", "2028200002", "2028200011", "2028200100"]
+    enroll = [ENROLL[0]] + [[row[0].replace("2026-2027-1", sem["code"])] + [no, f"学生{no}"] + row[3:]
+                             for no, row in zip(nos, [ENROLL[1], ENROLL[2], ENROLL[3], ENROLL[4]])]
+    for i, r in enumerate(enroll[1:], start=1):
+        r[7], r[8] = "C901", "排序测试班"
+    sch = [SCHED[0], [SCHED[1][0].replace("2026-2027学年秋季学期", sem["name"])] + ["C901"] + SCHED[1][2:8] + ["张老师", "T001", "1-16周", "星期五", "0910", "世纪馆", "4"]]
+    do_import(admin, "base", xlsx(BASE + [[no, f"学生{no}", "男", "法学院", None, "2028", "人大", None] for no in nos]), sid_new)
+    do_import(admin, "schedule", xlsx(sch), sid_new)
+    _, pre, res = do_import(admin, "enroll", xlsx(enroll), sid_new)
+    assert not pre["blocking"], pre
+    cid = next(c["id"] for c in admin.get(f"/api/semesters/{sid_new}/classes?scope=all").json()["classes"]
+               if c["class_no"] == "C901")
+    # 后补一个学号最小的学生排在名单末尾
+    assert admin.post(f"/api/admin/semesters/{sid_new}/enrollments",
+                      json={"student_no": "2028200001", "class_id": cid, "name": "补录学生"}).status_code == 200
+
+    wb = openpyxl.load_workbook(io.BytesIO(teacher.get(f"/api/classes/{cid}/template").content))
+    ws = wb.active
+    got = [row[0].value for row in ws.iter_rows(min_row=2)]
+    assert got == ["2028200001", "2028200002", "2028200009", "2028200011", "2028200100"]
+    # 学号列仍是文本，姓名、表头不变
+    assert [c.value for c in ws[1]][:3] == ["学号", "姓名", "性别"]
+    assert isinstance(ws.cell(row=2, column=1).value, str)
+    # 网页录入表和导出仍按同一学号顺序
+    web = [r["student_no"] for r in teacher.get(f"/api/classes/{cid}").json()["rows"]]
+    assert sorted(web, key=lambda s: int(s)) == got
