@@ -36,11 +36,15 @@ function toast(msg, err = false) {
   const t = $("#toast"); t.textContent = msg; t.className = "toast" + (err ? " err" : ""); t.hidden = false;
   clearTimeout(toast._t); toast._t = setTimeout(() => (t.hidden = true), err ? 5000 : 2200);
 }
-function modal(html, onMount) {
+function modal(html, onMount, onClose) {
   const m = $("#modal"); $(".modal-body", m).innerHTML = html; m.hidden = false;
+  modal._onClose = onClose || null;
   if (onMount) onMount($(".modal-body", m));
 }
-function closeModal() { $("#modal").hidden = true; }
+function closeModal() {
+  $("#modal").hidden = true;
+  const f = modal._onClose; modal._onClose = null; if (f) f();
+}
 $("#modal .modal-close").onclick = closeModal;
 $("#modal").addEventListener("mousedown", (e) => { if (e.target.id === "modal") closeModal(); });
 
@@ -312,7 +316,7 @@ function renderClass(C) {
       ${d.editable && c.status !== "已提交" ? `<button class="primary" id="submitBtn" title="提交后两项体测成绩锁定；运动技能、平时成绩仍可修改">提交体测成绩</button>` : ""}
       ${d.editable && c.status === "已提交" && !d.sem_locked ? `<button id="withdrawBtn" title="直接撤回，不用体育部审核">撤回提交</button>` : ""}
     </div>
-    <div class="muted small">填完一格按回车，先到右边一格，一行填完再到下一位学生；↑↓ 上下换格。耐力跑填完“分”会自动跳到“秒”。修改会自动保存。只有体测需要提交，体测录完后点“提交体测成绩”。体测填 0 时会问一句学生是不是没来测。免测、课上未测、缓考、退课、休学等特殊情况和学生信息修改点每行的“更多”。</div>
+    <div class="muted small">填完一格按回车，先到右边一格，一行填完再到下一位学生；↑↓ 上下换格。耐力跑填完“分”会自动跳到“秒”。修改会自动保存。只有体测需要提交，体测录完后点“提交体测成绩”。体测填 0 时会问一句学生是不是没来测，要标特殊情况就点框里的“标记特殊情况”。免测、课上未测、缓考、退课、休学等特殊情况和学生信息修改点每行的“更多”。</div>
   </div>
   <div class="grid-wrap"><table class="grid" id="grid">
     <thead><tr>
@@ -528,7 +532,9 @@ function commitSeg(C, seg, opts = {}) {
 
 /* ---- 体测填了 0：格子旁弹小框问是不是没来测 ----
    回车（或 Tab、离开这格）后弹出：这一格退出编辑状态，键盘不起作用，页面别处也点不了，
-   只能用鼠标点框里的【标为课上未测】或【确实是 0】，点完光标到下一格接着录。
+   只能用鼠标点框里的【标记特殊情况】或【确实是 0】。点【确实是 0】光标到下一格接着录；
+   点【标记特殊情况】打开这名学生的“更多”，突出这一项的体测状态，老师自己选；
+   不选直接关掉就保留 0，关掉后光标回到下一格。
    体测已锁定、粘贴、整班上传不弹，靠录入页上方的常驻提示兜底。 */
 function isZeroText(field, val) { return /^[ab]_raw$/.test(field) && /^0+$/.test(String(val).replace(/[^\d]/g, "")); }
 let zeroCtx = null;
@@ -550,37 +556,38 @@ function askZero(C, seg) {
   mask.id = "zeroMask"; mask.className = "zero-mask";
   const box = document.createElement("div");
   box.id = "zeroAsk"; box.className = "zero-ask";
-  box.innerHTML = `<span>学生没来测？</span><button class="primary" data-z="miss">标为课上未测</button><button data-z="keep">确实是 0</button>`;
+  box.innerHTML = `<span>学生没来测？</span><button class="primary" data-z="mark">标记特殊情况</button><button data-z="keep">确实是 0</button>`;
   document.body.append(mask, box);
   const rc = seg.getBoundingClientRect();
   box.style.left = `${Math.min(window.scrollX + rc.left, window.scrollX + document.documentElement.clientWidth - box.offsetWidth - 8)}px`;
   box.style.top = `${window.scrollY + rc.bottom + 4}px`;
   box.onclick = (e) => {
     const b = e.target.closest("[data-z]"); if (!b) return;
-    const live = zeroLiveSeg(); const miss = b.dataset.z === "miss";
+    const live = zeroLiveSeg(); const mark = b.dataset.z === "mark";
     closeZeroAsk();
-    nextInRow(live, 1);
-    if (miss) markMissed(C, Number(live.dataset.e), live.dataset.f[0]);
+    if (!mark) return nextInRow(live, 1);
+    const eid = Number(live.dataset.e), f = live.dataset.f;
+    markSpecial(C, eid, f[0], () => {  // 关掉“更多”后回到下一格；行可能已重画，按位置重新找
+      const cur = $(`#grid .seg[data-e="${eid}"][data-f="${f}"]`);
+      if (cur) nextInRow(cur, 1);
+    });
   };
   document.addEventListener("keydown", zeroAskKey, true);
   return true;
 }
-/* 标为课上未测：和在“更多”里选一样，清掉这格成绩、记修改记录、重算 */
-function markMissed(C, eid, k) {
-  C.queue.delete(`${eid}:${k}_raw`);
-  enqueue(C, eid, `${k}_status`, "课上未测");
-  flushQueue(C);
-  const r = C.byId.get(eid);
-  toast(`${r ? r.name + " " : ""}已标为“课上未测”`);
+/* 标记特殊情况：打开这名学生的“更多”，定位到填 0 那一项的体测状态。
+   选了特殊情况按“更多”里的逻辑清成绩、留痕、重算；不选关掉就保留 0。 */
+function markSpecial(C, eid, k, onClose) {
+  rowMenu(C, eid, { focusSt: `${k}_status`, onClose }).catch((e) => { toast(e.message, true); if (onClose) onClose(); });
 }
 function paintZeros(C) {
   const el = $("#zeroNote"); if (!el) return;
   const zs = C.d.pe_zeros || [];
   if (!zs.length) { el.innerHTML = ""; return; }
   const can = C.d.editable && !C.d.pe_locked;
-  el.innerHTML = `<div class="notice" style="margin-top:10px"><details><summary>本班有 <b>${zs.length}</b> 名学生体测填了 0，没来测的请标为课上未测。点这里看是谁</summary>
-    <ul class="zero-list">${zs.map((z) => `<li>${z.seq}. ${esc(z.student_no)} ${esc(z.name)}：${z.items.map((it) => `${esc(it.label)} 0 ${can ? `<button class="link" data-zm="${z.enrollment_id}:${it.key}">标为课上未测</button>` : ""}`).join("；")}</li>`).join("")}</ul></details></div>`;
-  $$("[data-zm]", el).forEach((b) => (b.onclick = () => { const [eid, k] = b.dataset.zm.split(":"); markMissed(C, Number(eid), k); }));
+  el.innerHTML = `<div class="notice" style="margin-top:10px"><details><summary>本班有 <b>${zs.length}</b> 名学生体测填了 0，没来测或有其他特殊情况的请标记。点这里看是谁</summary>
+    <ul class="zero-list">${zs.map((z) => `<li>${z.seq}. ${esc(z.student_no)} ${esc(z.name)}：${z.items.map((it) => `${esc(it.label)} 0 ${can ? `<button class="link" data-zm="${z.enrollment_id}:${it.key}">标记特殊情况</button>` : ""}`).join("；")}</li>`).join("")}</ul></details></div>`;
+  $$("[data-zm]", el).forEach((b) => (b.onclick = () => { const [eid, k] = b.dataset.zm.split(":"); markSpecial(C, Number(eid), k); }));
 }
 
 /* 录入表随整页滚动；外框只管横向滚动，表头靠位移贴在顶栏下方 */
@@ -698,8 +705,9 @@ async function showStandard(C, k) {
 }
 function secToTxt(v) { const m = Math.floor(v / 60); const s = +(v - m * 60).toFixed(1); return `${m}'${String(s).padStart(2, "0")}"`; }
 
-/* 「更多」弹窗，从上到下：特殊情况｜学生信息｜其他问题｜备注（按需）｜修改记录（收起） */
-async function rowMenu(C, eid) {
+/* 「更多」弹窗，从上到下：特殊情况｜学生信息｜备注｜其他问题｜修改记录（收起）
+   focusSt：从填 0 小框或 0 分清单打开时，那一项体测的状态框用和“待确认”一样的红框突出 */
+async function rowMenu(C, eid, { focusSt = null, onClose = null } = {}) {
   const r = C.byId.get(eid);
   const h = await api(`/api/classes/${C.id}/history/${eid}`);
   const st = h.standard || {};
@@ -708,9 +716,8 @@ async function rowMenu(C, eid) {
   const fieldName = { a_raw: "项目一原始成绩", a_status: "项目一状态", b_raw: "项目二原始成绩", b_status: "项目二状态", skill: "运动技能评定", regular: "平时成绩", note: "备注", course_status: "课程成绩特殊情况" };
   const slots = C.d.config.slots;
   const ed = C.d.editable, peLock = C.d.pe_locked;
-  const stSel = (k) => { const f = `${k}_status`; return `<label>${esc(r.display[k].item_label || slots.find((s) => s.key === k).label)} <select data-st="${f}" ${ed && !peLock ? "" : "disabled"}>${C.d.statuses.map((s) => `<option value="${s}" ${r.values[f] === s ? "selected" : ""}>${s === "正常" ? "正常参加" : s}</option>`).join("")}</select></label>`; };
+  const stSel = (k) => { const f = `${k}_status`; return `<label${focusSt === f ? ' class="pending-bad"' : ""}>${esc(r.display[k].item_label || slots.find((s) => s.key === k).label)} <select data-st="${f}" ${ed && !peLock ? "" : "disabled"}>${C.d.statuses.map((s) => `<option value="${s}" ${r.values[f] === s ? "selected" : ""}>${s === "正常" ? "正常参加" : s}</option>`).join("")}</select></label>`; };
   const courseSel = `<label>课程成绩 <select data-st="course_status" ${ed ? "" : "disabled"}>${(C.d.course_statuses || ["正常"]).map((s) => `<option value="${s}" ${(r.course_status || "正常") === s ? "selected" : ""}>${s}</option>`).join("")}</select></label>`;
-  const showNote = r.values.a_status === "违纪" || r.values.b_status === "违纪" || !!r.values.note;
   const lockInfo = peLock ? (C.d.sem_locked ? "体测成绩已由体育部锁定，性别和标准档不能再改" : "体测成绩已提交，性别和标准档不能再改") : "";
   // 待确认的项标红：按原因分到性别或标准档，分不出的两项都标
   const reasons = st.reasons || [];
@@ -733,11 +740,13 @@ async function rowMenu(C, eid) {
       <div>学院</div><div><input type="text" id="siCollege" value="${esc(stu.college || r.college || "")}" ${ed ? "" : "disabled"}></div>
       <div${bad(bandBad)}>标准档</div><div${bad(bandBad)}><select id="siBand" ${ed && !peLock ? "" : "disabled"}>${st.band ? "" : '<option value="">待确认</option>'}<option value="12" ${st.band === "12" ? "selected" : ""}>大一大二</option><option value="34" ${st.band === "34" ? "selected" : ""}>大三大四</option></select></div></div>
     ${ed ? `<div class="row" style="margin-top:6px"><span class="muted small">保存即生效。姓名、性别、学院是全校共用的学生信息，别的班也会跟着变；改性别或标准档会立即重算体测得分。${lockInfo}</span><span class="spacer"></span><button id="siSave">保存学生信息</button></div>` : ""}
+    <h4>备注</h4>
+    <div class="row"><textarea id="noteIn" rows="2" style="flex:1" placeholder="随便记几句，自己看的，不会通知体育部。违纪时请写明原因" ${ed ? "" : "disabled"}>${esc(r.values.note || "")}</textarea></div>
+    ${ed ? '<div class="row" style="margin-top:6px"><span class="muted small">体育部导出“本学期全部成绩”时会带上备注。</span><span class="spacer"></span><button id="noteBtn">保存</button></div>' : ""}
     <h4>其他问题</h4>
     ${issue.note ? `<p class="small">已提交：${esc(issue.note)} <span class="tag ${issue.resolved ? "s-已提交" : "warn"}">${issue.resolved ? `体育部已处理${issue.resolved_at ? " " + esc(issue.resolved_at) : ""}` : "待体育部处理"}</span></p>` : ""}
     <div class="row"><textarea id="ieNote" rows="2" style="flex:1" placeholder="上面改不了的问题写在这里，提交给体育部处理">${esc(issue.resolved ? "" : issue.note || "")}</textarea></div>
     <div class="row" style="margin-top:6px"><span class="spacer"></span>${issue.note && !issue.resolved ? '<button id="ieClr">撤回问题</button>' : ""}<button id="ieBtn">${issue.note && !issue.resolved ? "更新问题" : "提交给体育部"}</button></div>
-    ${showNote ? `<h4>备注</h4><div class="row"><input type="text" id="noteIn" style="flex:1" placeholder="违纪时请写明原因，会导出到成绩单备注" value="${esc(r.values.note || "")}" ${ed ? "" : "disabled"}>${ed ? '<button id="noteBtn">保存备注</button>' : ""}</div>` : ""}
     ${hist.length ? `<details style="margin-top:12px"><summary><b>修改记录（${hist.length} 条）</b></summary><table class="list small"><tr><th>时间</th><th>字段</th><th>原值</th><th>新值</th><th>换算</th><th>版本</th><th>操作人</th></tr>
       ${hist.map((x) => `<tr><td>${esc(x.at)}</td><td>${esc(fieldName[x.field] || x.field)}</td><td>${esc(x.old ?? "")}</td><td>${esc(x.new ?? "")}</td>
       <td>${x.computed && x.computed.slot && x.computed.slot.score !== null ? `${x.computed.slot.level ?? ""}分档→${x.computed.slot.score}分→折算${x.computed.slot.folded}` : esc((x.computed && x.computed.reason) || "")}${x.computed && x.computed.total !== undefined && x.computed.total !== null ? `；总${x.computed.total}` : ""}</td>
@@ -745,8 +754,11 @@ async function rowMenu(C, eid) {
     const mark = async (note) => { try { await api(`/api/classes/${C.id}/info-error`, { method: "POST", body: { enrollment_id: eid, note } }); r.info_error = note || null; r.info_error_resolved = false; refreshRows(C, new Set([eid])); closeModal(); toast(note ? "已提交给体育部" : "已撤回"); } catch (e) { toast(e.message, true); } };
     $("#ieBtn", el).onclick = () => { const v = $("#ieNote", el).value.trim(); if (!v) return toast("请写明是什么问题", true); mark(v); };
     if ($("#ieClr", el)) $("#ieClr", el).onclick = () => mark("");
-    $$("[data-st]", el).forEach((x) => (x.onchange = () => { enqueue(C, eid, x.dataset.st, x.value); flushQueue(C); toast(`已设为“${x.value === "正常" ? (x.dataset.st === "course_status" ? "正常" : "正常参加") : x.value}”`); }));
-    if ($("#noteBtn", el)) $("#noteBtn", el).onclick = () => { enqueue(C, eid, "note", $("#noteIn", el).value.trim()); closeModal(); };
+    $$("[data-st]", el).forEach((x) => (x.onchange = () => {
+      // 体测标了特殊情况：还没存上的这格成绩（比如刚填的 0）不再提交，由服务器清掉原成绩并留痕
+      if (/^[ab]_status$/.test(x.dataset.st) && x.value !== "正常") C.queue.delete(`${eid}:${x.dataset.st[0]}_raw`);
+      enqueue(C, eid, x.dataset.st, x.value); flushQueue(C); toast(`已设为“${x.value === "正常" ? (x.dataset.st === "course_status" ? "正常" : "正常参加") : x.value}”`); }));
+    if ($("#noteBtn", el)) $("#noteBtn", el).onclick = async () => { enqueue(C, eid, "note", $("#noteIn", el).value.trim()); while (C._busy) await new Promise((ok) => setTimeout(ok, 100)); await flushQueue(C); toast(C.queue.size ? "备注没存上，稍后自动重试" : "备注已保存"); };
     if ($("#siSave", el)) $("#siSave", el).onclick = async () => {
       const body = { name: $("#siName", el).value.trim(), college: $("#siCollege", el).value.trim() };
       if (!peLock) { if ($("#siGender", el).value) body.gender = $("#siGender", el).value; if ($("#siBand", el).value) body.band = $("#siBand", el).value; }
@@ -759,7 +771,9 @@ async function rowMenu(C, eid) {
         await reloadClass(C); toast("已保存，得分已重算");
       } catch (e) { toast(e.message, true); }
     };
-  });
+    const fs = focusSt && $(`select[data-st="${focusSt}"]`, el);
+    if (fs && !fs.disabled) { fs.scrollIntoView({ block: "nearest" }); fs.focus(); }
+  }, onClose);
 }
 /* 改了学生信息或标准档后重新取一遍本班数据，保住滚动位置 */
 async function reloadClass(C) {
