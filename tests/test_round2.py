@@ -1,4 +1,4 @@
-"""第二轮修改：教师改学生信息与标准档、其他问题、课程成绩特殊情况、只提交体测、公共账号、两份新导出。"""
+"""第二轮修改：教师改学生信息与标准档、其他问题、课程成绩特殊情况、体育部锁定体测、公共账号、两份新导出。"""
 import io
 
 import openpyxl
@@ -121,7 +121,7 @@ def test_other_issue_flow(env):
     assert t.post(f"/api/admin/enrollments/{e2}/issue-resolved", json={"resolved": True}).status_code == 403
 
 
-def test_course_status_and_pe_submit(env):
+def test_course_status_and_pe_lock(env):
     t, admin, cid, sid = env["teacher"], env["admin"], env["cid"], env["sid"]
     rows = rows_of(t, cid)
     ids = {no: r["enrollment_id"] for no, r in rows.items()}
@@ -142,15 +142,13 @@ def test_course_status_and_pe_submit(env):
     assert r3["course_status"] == "退课" and r3["total"] is None and r3["complete"]  # 技能、平时可以不填
     assert rows["2030100001"]["total"] is not None
 
-    # 运动技能、平时成绩没填也能提交体测
-    assert t.get(f"/api/classes/{cid}/check").json()["blocking"] is False
-    assert t.post(f"/api/classes/{cid}/submit").status_code == 200
-    assert admin.get(f"/api/admin/semesters/{sid}/overview").json()["pe_submitted"] >= 1
-    ov = admin.get(f"/api/admin/semesters/{sid}/overview").json()["class_list"]
-    assert next(c for c in ov if c["id"] == cid)["submitted"]
+    # 体育部锁定本学期体测
+    assert admin.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": True}).status_code == 200
+    ov = admin.get(f"/api/admin/semesters/{sid}/overview").json()
+    assert ov["semester"]["pe_locked"] and "class_list" in ov
     d = t.get(f"/api/classes/{cid}").json()
     assert d["editable"] and d["pe_locked"]
-    # 提交后：课程特殊情况、技能、备注能改；体测不能改；性别、标准档不能改，姓名能改
+    # 锁定后：课程特殊情况、技能、备注能改；体测不能改；性别、标准档不能改，姓名能改
     res = t.post(f"/api/classes/{cid}/cells", json={"changes": [
         {"enrollment_id": ids["2027100003"], "field": "course_status", "value": "缓考"},
         {"enrollment_id": ids["2029100002"], "field": "skill", "value": "40"},
@@ -160,7 +158,7 @@ def test_course_status_and_pe_submit(env):
     assert t.post(f"/api/classes/{cid}/students/{ids['2029100002']}", json={"gender": "男"}).status_code == 403
     assert t.post(f"/api/classes/{cid}/students/{ids['2029100002']}", json={"band": "34"}).status_code == 403
     assert t.post(f"/api/classes/{cid}/students/{ids['2029100002']}", json={"name": "乙贰"}).status_code == 200
-    assert t.post(f"/api/classes/{cid}/submit").status_code == 400  # 不能重复提交
+    assert admin.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": False}).status_code == 200
 
     # 教师导出：照网页列顺序，课程特殊情况的总成绩格写状态
     wb = openpyxl.load_workbook(io.BytesIO(t.get(f"/api/classes/{cid}/export?sort=no").content))

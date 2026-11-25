@@ -20,7 +20,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import auth, config, exporter, grading, importer, score_import, scoring, services
 from .auth import admin_user, client_ip, current_user, get_db, is_admin
 from .models import (AuditLog, Enrollment, GradeCorrection, ScoreHistory, ScoreRecord, Semester, StandardSnapshot,
-                     Student, TeachingClass, UnlockRequest, User, init_db, now)
+                     Student, TeachingClass, User, init_db, now)
 
 STATIC = Path(__file__).parent / "static"
 
@@ -186,7 +186,9 @@ def change_password(old: str = Body(...), new: str = Body(...), u: User = Depend
 
 def sem_dict(s: Semester) -> dict:
     return {"id": s.id, "code": s.code, "name": s.name, "season": s.season, "is_current": s.is_current,
-            "entry_open": s.entry_open, "config": s.config, "standard_version": s.standard_version}
+            "entry_open": s.entry_open, "config": s.config, "standard_version": s.standard_version,
+            "pe_locked": bool(s.pe_locked), "pe_locked_by": s.pe_locked_by,
+            "pe_locked_at": s.pe_locked_at.strftime("%Y-%m-%d %H:%M") if s.pe_locked_at else None}
 
 
 @app.get("/api/semesters")
@@ -337,16 +339,12 @@ def get_class(cid: int, u: User = Depends(current_user), db: Session = Depends(g
     editable, why = services.can_edit(c, sem)
     locked = services.pe_locked(c)
     if editable and locked:
-        why = "本班体测成绩已提交并锁定，如需更正请申请撤回；运动技能、平时成绩、备注和课程成绩特殊情况仍可修改"
-    unlock = db.scalars(select(UnlockRequest).where(UnlockRequest.class_id == c.id)
-                        .order_by(UnlockRequest.id.desc())).first()
+        why = "本学期体测成绩已由体育部锁定，如需更正请联系体育部；运动技能、平时成绩、备注和课程成绩特殊情况仍可修改"
     return {"semester": sem_dict(sem), "class": class_brief(c), "config": cfg,
             "config_labels": {s["key"]: {g: scoring.item_label(it) for g, it in s["items"].items()} for s in cfg["slots"]},
             "editable": editable, "pe_locked": locked, "readonly_reason": why, "rows": rows,
             "statuses": scoring.STATUSES, "course_statuses": scoring.COURSE_STATUSES,
-            "standard_version": sem.standard_version,
-            "unlock_request": None if not unlock else {"status": unlock.status, "reason": unlock.reason,
-                                                       "review_note": unlock.review_note}}
+            "standard_version": sem.standard_version, "pe_zeros": services.pe_zeros(rows, cfg)}
 
 
 @app.post("/api/classes/{cid}/cells")
@@ -364,8 +362,9 @@ def save_cells(cid: int, request: Request, changes: list[dict] = Body(..., embed
                      cells=len([r for r in res["results"] if r.get("ok") and not r.get("unchanged")]))
     db.commit()
     rows = {r["enrollment_id"]: r for r in services.load_class_rows(db, c, sem)} if res["touched"] else {}
+    zeros = services.pe_zeros(list(rows.values()), services.class_config(c, sem)) if res["touched"] else None
     return {"results": res["results"], "rows": [rows[i] for i in res["touched"] if i in rows],
-            "status": c.status}
+            "status": c.status, "pe_zeros": zeros}
 
 
 @app.post("/api/classes/{cid}/preview")
@@ -426,7 +425,7 @@ def teacher_edit_student(cid: int, eid: int, request: Request, body: dict = Body
     """教师在“更多”里直接改学生姓名、性别、学院和标准档，保存即生效、立即重算。
 
     学生基础数据跨学期共用：改后标为手动修改，之后导入基础数据表不覆盖。
-    标准档写成只对本学期生效的认定记录（第一优先），待确认的学生由教师定档后不再阻断提交。
+    标准档写成只对本学期生效的认定记录（第一优先），待确认的学生由教师定档后不再待确认。
     """
     c, sem = _class(db, cid, u)
     ok, why = services.can_edit(c, sem)
@@ -456,13 +455,9 @@ def teacher_edit_student(cid: int, eid: int, request: Request, body: dict = Body
     gender_changed = gender != before["gender"]
     band_needed = band is not None and (band != before["band"] or before["pending"])
     if gender_changed or (band is not None and band != before["band"]):
-        # 性别、标准档直接改变体测得分；体测已提交的班不能再动
-        locked = db.scalar(select(TeachingClass).join(Enrollment, Enrollment.class_id == TeachingClass.id).where(
-            Enrollment.semester_id == sem.id, Enrollment.student_no == no, Enrollment.active.is_(True),
-            TeachingClass.status == "已提交"))
-        if locked:
-            raise HTTPException(403, f"该生所在的 {locked.class_name} 体测成绩已提交，不能再改性别或标准档；"
-                                     "如需更正请先申请撤回")
+        # 性别、标准档直接改变体测得分；体测锁定后不能再动
+        if sem.pe_locked:
+            raise HTTPException(403, "本学期体测成绩已由体育部锁定，不能再改性别或标准档；如需更正请联系体育部")
     changed = {k for k, v in (("name", name), ("college", college)) if v != before[k]}
     if gender_changed:
         changed.add("gender")
@@ -496,49 +491,6 @@ def teacher_edit_student(cid: int, eid: int, request: Request, body: dict = Body
                  fields=sorted(changed), old=before, new=after)
     db.commit()
     return {"ok": True, "changed": sorted(changed)}
-
-
-@app.get("/api/classes/{cid}/check")
-def check_class(cid: int, u: User = Depends(current_user), db: Session = Depends(get_db)):
-    c, sem = _class(db, cid, u)
-    return services.submit_check(services.load_class_rows(db, c, sem), services.class_config(c, sem))
-
-
-@app.post("/api/classes/{cid}/submit")
-def submit_class(cid: int, request: Request, u: User = Depends(current_user), db: Session = Depends(get_db)):
-    c, sem = _class(db, cid, u)
-    ok, why = services.can_edit(c, sem)
-    if not ok:
-        raise HTTPException(403, why)
-    if services.pe_locked(c):
-        raise HTTPException(400, "本班体测成绩已经提交")
-    chk = services.submit_check(services.load_class_rows(db, c, sem), services.class_config(c, sem))
-    if chk["pending"]:
-        raise HTTPException(400, f"本班还有 {len(chk['pending'])} 名学生的年级或性别待确认，"
-                                 "可在该生的“更多”里核对后直接修改，或等体育部确认")
-    if chk["missing"]:
-        raise HTTPException(400, f"本班还有 {len(chk['missing'])} 名学生的体测成绩没有录完（没填成绩也没标特殊情况）")
-    c.status, c.submitted_at, c.submitted_by = "已提交", now(), u.staff_no
-    services.log(db, u.staff_no, "提交", f"{c.class_no} {c.class_name}", sem.id, ip=client_ip(request),
-                 missing=len(chk["missing"]), sudden=len(chk["sudden"]))
-    db.commit()
-    return {"ok": True}
-
-
-@app.post("/api/classes/{cid}/unlock-request")
-def unlock_request(cid: int, reason: str = Body(..., embed=True), u: User = Depends(current_user),
-                   db: Session = Depends(get_db)):
-    c, sem = _class(db, cid, u)
-    if c.status != "已提交":
-        raise HTTPException(400, "本班体测成绩尚未提交，无需撤回")
-    if db.scalar(select(UnlockRequest).where(UnlockRequest.class_id == c.id, UnlockRequest.status == "待审核")):
-        raise HTTPException(400, "已有待审核的撤回申请")
-    if not reason.strip():
-        raise HTTPException(400, "请填写撤回原因")
-    db.add(UnlockRequest(class_id=c.id, reason=reason.strip()[:1000], requester=u.staff_no))
-    services.log(db, u.staff_no, "撤回申请", f"{c.class_no} {c.class_name}", sem.id, reason=reason)
-    db.commit()
-    return {"ok": True}
 
 
 @app.get("/api/classes/{cid}/history/{eid}")
@@ -1222,35 +1174,20 @@ def admin_update_class(cid: int, body: dict = Body(...), u: User = Depends(admin
     return class_brief(c)
 
 
-# ================================================================= 管理端：撤回审核、日志、导出、账号
+# ================================================================= 管理端：体测锁定、日志、导出、账号
 
-@app.get("/api/admin/unlock-requests")
-def list_unlock(u: User = Depends(admin_user), db: Session = Depends(get_db)):
-    rs = db.execute(select(UnlockRequest, TeachingClass).join(TeachingClass, TeachingClass.id == UnlockRequest.class_id)
-                    .order_by(UnlockRequest.id.desc()).limit(200)).all()
-    return [{"id": r.id, "class_id": c.id, "class_name": c.class_name, "teacher": c.teacher_name,
-             "reason": r.reason, "status": r.status, "requester": r.requester, "reviewer": r.reviewer,
-             "review_note": r.review_note, "at": r.created_at.strftime("%Y-%m-%d %H:%M")} for r, c in rs]
-
-
-@app.post("/api/admin/unlock-requests/{rid}")
-def review_unlock(rid: int, approve: bool = Body(...), note: str = Body(""), u: User = Depends(admin_user),
-                  db: Session = Depends(get_db)):
-    r = db.get(UnlockRequest, rid)
-    if not r or r.status != "待审核":
-        raise HTTPException(404, "申请不存在或已处理")
-    note = (note or "").strip()
-    if not approve and not note:
-        raise HTTPException(400, "请填写驳回原因")
-    r.status = "已同意" if approve else "已驳回"
-    r.reviewer, r.review_note, r.reviewed_at = u.staff_no, note, now()
-    c = db.get(TeachingClass, r.class_id)
-    if approve:
-        c.status = "录入中"
-    services.log(db, u.staff_no, "撤回审核", f"{c.class_no} {c.class_name}", c.semester_id, approve=approve, note=note)
+@app.post("/api/admin/semesters/{sid}/pe-lock")
+def set_pe_lock(sid: int, request: Request, locked: bool = Body(..., embed=True), u: User = Depends(admin_user),
+                db: Session = Depends(get_db)):
+    """一键锁定／解锁本学期全部班级的体测成绩。锁定只管两项体测的成绩和状态。"""
+    sem = _sem(db, sid)
+    if bool(sem.pe_locked) == locked:
+        return sem_dict(sem)
+    sem.pe_locked = locked
+    sem.pe_locked_by, sem.pe_locked_at = u.staff_no, now()
+    services.log(db, u.staff_no, "锁定体测" if locked else "解锁体测", sem.name, sem.id, ip=client_ip(request))
     db.commit()
-    return {"ok": True}
-
+    return sem_dict(sem)
 
 @app.get("/api/admin/logs")
 def list_logs(semester_id: str = "", action: str = "", actor: str = "", page: int = 1,
@@ -1306,11 +1243,17 @@ def semester_overview(sid: int, u: User = Depends(admin_user), db: Session = Dep
                          .group_by(TeachingClass.status)).all())
     cls = sorted(db.scalars(select(TeachingClass).where(TeachingClass.semester_id == sid)),
                  key=services.class_sort_key)
+    # 各班体测填了 0 的人数（状态为正常、成绩等于 0）：多半是没来测被填了 0
+    zeros = dict(db.execute(select(Enrollment.class_id, func.count()).join(
+        ScoreRecord, ScoreRecord.enrollment_id == Enrollment.id).where(
+        Enrollment.semester_id == sid, Enrollment.active.is_(True),
+        ((ScoreRecord.a_raw == 0) & (ScoreRecord.a_status == "正常")) |
+        ((ScoreRecord.b_raw == 0) & (ScoreRecord.b_status == "正常"))).group_by(Enrollment.class_id)).all())
+    locker = db.get(User, sem.pe_locked_by) if sem.pe_locked_by else None
     return {"semester": sem_dict(sem), "classes": sum(st.values()), "status": st,
-            "pe_submitted": st.get("已提交", 0),
+            "pe_locked_by_name": locker.name if locker else "",
             "class_list": [{"id": c.id, "class_no": c.class_no, "course_name": c.course_name, "class_name": c.class_name,
-                            "teacher_name": c.teacher_name, "staff_no": c.staff_no, "submitted": c.status == "已提交",
-                            "submitted_at": c.submitted_at.strftime("%Y-%m-%d %H:%M") if c.submitted_at and c.status == "已提交" else None}
+                            "teacher_name": c.teacher_name, "staff_no": c.staff_no, "zeros": zeros.get(c.id, 0)}
                            for c in cls],
             "teacher_edits": db.scalar(select(func.count()).select_from(AuditLog).where(
                 AuditLog.semester_id == sid, AuditLog.action == "教师修改学生信息")),
@@ -1318,9 +1261,6 @@ def semester_overview(sid: int, u: User = Depends(admin_user), db: Session = Dep
                 Enrollment.semester_id == sid, Enrollment.active.is_(True))),
             "pending": db.scalar(select(func.count()).select_from(StandardSnapshot).where(
                 StandardSnapshot.semester_id == sid, StandardSnapshot.pending.is_(True))),
-            "unlock_waiting": db.scalar(select(func.count()).select_from(UnlockRequest).join(
-                TeachingClass, TeachingClass.id == UnlockRequest.class_id).where(
-                TeachingClass.semester_id == sid, UnlockRequest.status == "待审核")),
             "info_errors": db.scalar(select(func.count()).select_from(Enrollment).where(
                 Enrollment.semester_id == sid, Enrollment.active.is_(True), Enrollment.info_error.is_not(None),
                 Enrollment.info_error_resolved.is_not(True))),

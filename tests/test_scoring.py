@@ -77,7 +77,7 @@ def test_compute_row_totals_and_rounding():
 def test_statuses():
     cfg = s.default_config("fall")
     out = s.compute_row(gender="F", band="34", config=cfg,
-                        values={"a_status": "缺考", "b_status": "免测", "skill": 50, "regular": 8})
+                        values={"a_status": "课上未测", "b_status": "免测", "skill": 50, "regular": 8})
     assert out["slots"]["a"]["folded"] == 0
     assert out["slots"]["b"]["display"] == "免测" and out["slots"]["b"]["folded"] is None
     assert out["total"] == 58.0
@@ -102,10 +102,10 @@ def test_partial_subtotal_is_not_summed():
 
 
 def test_special_status_counts_as_decided():
-    """免测、缺考等特殊情况算“已定”，不挡小计；缓测按缺项处理，挡小计。"""
+    """免测、课上未测等特殊情况算“已定”，不挡小计；缓测按缺项处理，挡小计。"""
     cfg = s.default_config("fall")
     out = s.compute_row(gender="F", band="34", config=cfg,
-                        values={"a_status": "缺考", "b_status": "免测", "skill": 50, "regular": 8})
+                        values={"a_status": "课上未测", "b_status": "免测", "skill": 50, "regular": 8})
     assert out["subtotal"] == 0.0 and out["total"] == 58.0
     out = s.compute_row(gender="F", band="34", config=cfg,
                         values={"a_status": "缓测", "b_status": "免测", "skill": 50, "regular": 8})
@@ -138,3 +138,15 @@ def test_score_inputs():
     for bad in ("61", "55.3", "-1", "abc"):
         with pytest.raises(s.ParseError):
             s.score_parse_simple(bad, 0, 60, "x")
+
+
+def test_status_list_and_legacy_names():
+    """体测特殊情况：去掉作弊，缺考改为课上未测；课上未测、违纪记 0 分。旧写法读入时换成新写法。"""
+    assert s.STATUSES == ["正常", "免测", "缓测", "课上未测", "违纪"]
+    assert s.ZERO_STATUSES == {"课上未测", "违纪"}
+    assert s.normalize_status("缺考") == "课上未测" and s.normalize_status("作弊") == "违纪"
+    assert s.normalize_status("免测") == "免测"
+    out = s.compute_row(gender="M", band="12", config=s.default_config("fall"),
+                        values={"a_status": "课上未测", "b_raw": 273, "skill": 50, "regular": 8})
+    assert out["slots"]["a"]["score"] == 0 and out["slots"]["a"]["display"] == "课上未测"
+    assert out["subtotal"] == 10.0 and out["total"] == 68.0

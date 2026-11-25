@@ -21,8 +21,14 @@ ITEM_GENDER = {
 TIME_ITEMS = {"run1000", "run800", "run50"}
 BONUS_ITEMS = {"run1000", "run800", "pull_up", "sit_up"}  # 加分只适用于耐力跑与引体向上/仰卧起坐
 
-STATUSES = ["正常", "免测", "缓测", "缺考", "作弊", "违纪"]
-ZERO_STATUSES = {"缺考", "作弊", "违纪"}
+STATUSES = ["正常", "免测", "缓测", "课上未测", "违纪"]
+ZERO_STATUSES = {"课上未测", "违纪"}
+# 停用的旧写法：老模板、老数据里还会出现，读入时换成现在的状态（数据库在启动时迁移，见 models.init_db）
+LEGACY_STATUSES = {"缺考": "课上未测", "作弊": "违纪"}
+
+
+def normalize_status(text: str) -> str:
+    return LEGACY_STATUSES.get(text, text)
 # 课程成绩特殊情况：非“正常”时总成绩不算，显示状态文字，运动技能和平时成绩可以不填
 COURSE_STATUSES = ["正常", "缓考", "缺考", "退课"]
 
@@ -228,7 +234,7 @@ def compute_row(*, gender: str | None, band: str | None, config: dict, values: d
     """
     out = {"slots": {}, "subtotal": None, "total": None, "issues": [], "complete": True}
     sub = Decimal("0")
-    # 体测小计只在参与它的每一项都“定了”时才出数：填了成绩，或标了免测／缺考／作弊／违纪等特殊情况。
+    # 体测小计只在参与它的每一项都“定了”时才出数：填了成绩，或标了免测／课上未测／违纪等特殊情况。
     # 有一项还空着、或标了缓测（按缺项处理），整个小计就不算，避免只加已填的那几项得出偏小的数。
     sub_ready = True
     for slot in config["slots"]:

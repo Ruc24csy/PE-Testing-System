@@ -115,3 +115,6 @@ table.grid th.sticky,table.grid td.sticky{width:42px;min-width:42px;max-width:42
 .brand-logo{width:30px;height:30px;border-radius:8px;box-shadow:0 0 0 2px #ffffff55}
 .login-brand{display:flex;align-items:center;gap:12px;font-size:18px;font-weight:700;margin-bottom:18px}
 .login-brand img{width:48px;height:48px}
+.zero-ask{position:absolute;z-index:50;display:flex;gap:6px;align-items:center;padding:6px 8px;background:#fff;border:1px solid #f0b400;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.15);font-size:13px;white-space:nowrap}
+.zero-ask button{padding:2px 8px;font-size:12px}
+.zero-list{margin:6px 0 0;padding-left:20px;max-height:240px;overflow:auto}
