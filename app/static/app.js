@@ -65,6 +65,7 @@ const routes = [
 ];
 window.addEventListener("hashchange", route);
 async function route() {
+  closeZeroAsk();
   const h = location.hash || "#/";
   if (state.cls && state.cls.flush) await state.cls.flush();
   if (!h.startsWith("#/login")) {
@@ -521,37 +522,48 @@ function commitSeg(C, seg, opts = {}) {
   const changed = val !== (seg.dataset.orig ?? "");
   if (changed) enqueue(C, Number(seg.dataset.e), seg.dataset.f, val);
   seg.dataset.orig = val;
-  if (changed && !opts.noAsk && isZeroText(seg.dataset.f, val)) askZero(C, seg);
-  else if (changed) closeZeroAsk();
+  if (changed && !opts.noAsk && isZeroText(seg.dataset.f, val) && askZero(C, seg)) return "ask";
+  if (changed) closeZeroAsk();
 }
 
 /* ---- 体测填了 0：格子旁弹小框问是不是没来测 ----
-   键盘录入时不打断：焦点照常跳到下一格，小框留在原格旁边；
-   按 Esc、回车或改别的格子都按“确实是 0”处理（关掉小框、保留 0）。粘贴和整班上传不弹，靠录入页上方的常驻提示兜底。 */
+   回车（或 Tab、离开这格）后弹出：这一格退出编辑状态，键盘不起作用，页面别处也点不了，
+   只能用鼠标点框里的【标为课上未测】或【确实是 0】，点完光标到下一格接着录。
+   体测已锁定、粘贴、整班上传不弹，靠录入页上方的常驻提示兜底。 */
 function isZeroText(field, val) { return /^[ab]_raw$/.test(field) && /^0+$/.test(String(val).replace(/[^\d]/g, "")); }
-function closeZeroAsk() { const el = $("#zeroAsk"); if (el) el.remove(); document.removeEventListener("keydown", zeroAskKey, true); }
-function zeroAskKey(e) {
-  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeZeroAsk(); }
-  else if (e.key === "Enter" || e.key === "Tab") closeZeroAsk();  // 继续往下录：保留 0，回车照常跳格
+let zeroCtx = null;
+function closeZeroAsk() {
+  for (const id of ["#zeroAsk", "#zeroMask"]) { const el = $(id); if (el) el.remove(); }
+  zeroCtx = null; document.removeEventListener("keydown", zeroAskKey, true);
+}
+function zeroAskKey(e) { if (zeroCtx) { e.preventDefault(); e.stopPropagation(); } }  // 等鼠标点，按键一律不起作用
+function zeroLiveSeg() {  // 自动保存可能重画了这一行，按位置重新找到这一格
+  const { seg } = zeroCtx;
+  return $(`#grid .seg[data-e="${seg.dataset.e}"][data-f="${seg.dataset.f}"]`) || seg;
 }
 function askZero(C, seg) {
   closeZeroAsk();
-  if (C.d.pe_locked || !C.d.editable) return;
-  const eid = Number(seg.dataset.e), k = seg.dataset.f[0];
+  if (C.d.pe_locked || !C.d.editable) return false;
+  zeroCtx = { C, seg };
+  if (document.activeElement && seg.contains(document.activeElement)) document.activeElement.blur();
+  const mask = document.createElement("div");
+  mask.id = "zeroMask"; mask.className = "zero-mask";
   const box = document.createElement("div");
   box.id = "zeroAsk"; box.className = "zero-ask";
   box.innerHTML = `<span>学生没来测？</span><button class="primary" data-z="miss">标为课上未测</button><button data-z="keep">确实是 0</button>`;
-  document.body.appendChild(box);
+  document.body.append(mask, box);
   const rc = seg.getBoundingClientRect();
   box.style.left = `${Math.min(window.scrollX + rc.left, window.scrollX + document.documentElement.clientWidth - box.offsetWidth - 8)}px`;
   box.style.top = `${window.scrollY + rc.bottom + 4}px`;
-  box.onmousedown = (e) => e.preventDefault();  // 点按钮不抢走正在录入那一格的焦点
   box.onclick = (e) => {
     const b = e.target.closest("[data-z]"); if (!b) return;
+    const live = zeroLiveSeg(); const miss = b.dataset.z === "miss";
     closeZeroAsk();
-    if (b.dataset.z === "miss") markMissed(C, eid, k);
+    nextInRow(live, 1);
+    if (miss) markMissed(C, Number(live.dataset.e), live.dataset.f[0]);
   };
   document.addEventListener("keydown", zeroAskKey, true);
+  return true;
 }
 /* 标为课上未测：和在“更多”里选一样，清掉这格成绩、记修改记录、重算 */
 function markMissed(C, eid, k) {
@@ -610,7 +622,7 @@ function bindClass(C) {
     const t = e.target; const seg = segOf(t); if (!seg || !t.classList.contains("sg")) return;
     const ins = $$("input.sg", seg); const i = Number(t.dataset.i);
     const atStart = t.selectionStart === 0 && t.selectionEnd === 0; const atEnd = t.selectionStart === t.value.length;
-    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); commitSeg(C, seg); nextInRow(seg, e.shiftKey ? -1 : 1); }
+    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); if (commitSeg(C, seg) !== "ask") nextInRow(seg, e.shiftKey ? -1 : 1); }
     else if (e.key === "ArrowDown") { e.preventDefault(); moveFocus(seg, 1); }
     else if (e.key === "ArrowUp") { e.preventDefault(); moveFocus(seg, -1); }
     else if (e.key === "ArrowLeft" && atStart && i > 0) { e.preventDefault(); ins[i - 1].focus(); ins[i - 1].select(); }
