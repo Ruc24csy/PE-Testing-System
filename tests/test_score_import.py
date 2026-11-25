@@ -1,4 +1,4 @@
-"""体育部从表格导入体测成绩：按表名认项目、取最优（表内多条、与已有成绩比）、跳过原因、锁定班不改、回退。"""
+"""体育部从表格导入体测成绩：按表名认项目、取最优（表内多条、与已有成绩比）、跳过原因、标了特殊状态的不改、锁定后不改、回退。"""
 import io
 
 import openpyxl
@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app import score_import, scoring
 from app.main import app
-from app.models import SessionLocal, TeachingClass, init_db
+from app.models import init_db
 from tests.test_api import do_import, xlsx
 
 SEM = "2036-2037学年秋季学期"
@@ -93,9 +93,11 @@ def env():
         {"enrollment_id": rows[M1]["enrollment_id"], "field": "b_raw", "value": "250"},
         {"enrollment_id": rows[F1]["enrollment_id"], "field": "a_raw", "value": "3'30\""}]})
     assert all(x["ok"] for x in r.json()["results"]), r.text
-    with SessionLocal() as db:
-        db.get(TeachingClass, classes["K002"]).status = "已提交"
-        db.commit()
+    # 男二立定跳远标了免测：导入不改
+    m2 = admin.get(f"/api/classes/{classes['K002']}").json()["rows"][0]
+    r = admin.post(f"/api/classes/{classes['K002']}/cells", json={"changes": [
+        {"enrollment_id": m2["enrollment_id"], "field": "b_status", "value": "免测"}]})
+    assert all(x["ok"] for x in r.json()["results"]), r.text
     return {"admin": admin, "sid": sid, "classes": classes}
 
 
@@ -139,7 +141,7 @@ def test_precheck_reports_updates_and_skip_reasons(env):
     reasons = [(s["student_no"].strip(), s["sheet"], s["reason"]) for s in r["skips"]]
     has = lambda no, sheet, text: any(n == no and sh == sheet and text in rs for n, sh, rs in reasons)  # noqa: E731
     assert has(M1, "立定跳远", "表里有更好的一条")
-    assert has(M2, "立定跳远", "已提交锁定")
+    assert has(M2, "立定跳远", "已标为“免测”")
     assert has(M1, "立定跳远", "成绩格式不对")
     assert has(X, "立定跳远", "没有这个学号的有效选课记录")
     assert has(M1, "1000米", "表里有更好的一条")  # 4 即 4分00秒，比 3分40秒慢
@@ -164,7 +166,7 @@ def test_commit_takes_best_keeps_locked_and_reverts(env):
     assert k1[M1]["b_raw"] == 255 and k1[M1]["a_raw"] == 220
     assert k1[F1]["b_raw"] == 180 and k1[F1]["a_raw"] == 210  # 800 米保留原来更好的 3'30"
     assert k1[M3]["a_raw"] == 230 and values(env, "K003")[M3]["b_raw"] == 260
-    assert values(env, "K002")[M2]["b_raw"] is None  # 锁定班不改
+    assert values(env, "K002")[M2]["b_raw"] is None  # 标了免测的不改
     # 有修改记录和操作日志，能看出是导入写的
     rows = {r["student_no"]: r for r in admin.get(f"/api/classes/{env['classes']['K001']}").json()["rows"]}
     hist = admin.get(f"/api/classes/{env['classes']['K001']}/history/{rows[M1]['enrollment_id']}").json()
@@ -179,6 +181,19 @@ def test_commit_takes_best_keeps_locked_and_reverts(env):
     assert rv["reverted"] == 7
     k1 = values(env, "K001")
     assert k1[M1]["b_raw"] == 250 and k1[M1]["a_raw"] is None and k1[F1]["b_raw"] is None
+
+
+def test_locked_semester_skips_pe(env):
+    """体育部锁定本学期体测后，表格导入一条都不改，跳过原因写明已锁定；解锁后照常。"""
+    admin, sid = env["admin"], env["sid"]
+    assert admin.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": True}).status_code == 200
+    try:
+        r = upload(env)
+        assert r["updates"] == []
+        assert any("已锁定" in s["reason"] for s in r["skips"])
+    finally:
+        assert admin.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": False}).status_code == 200
+    assert len(upload(env)["updates"]) == 7
 
 
 def test_readonly_semester_rejected(env):

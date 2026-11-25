@@ -52,6 +52,10 @@ class Semester(Base):
     entry_open: Mapped[bool] = mapped_column(Boolean, default=False)  # 以往学期是否开放补录
     config: Mapped[dict] = mapped_column(JSON)  # 体测项目配置（默认值）
     standard_version: Mapped[str] = mapped_column(String(16), default="GB2014")
+    # 体育部一键锁定本学期全部班级的体测成绩：锁定后两项体测成绩和状态不能改，其他成绩照常
+    pe_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    pe_locked_by: Mapped[str | None] = mapped_column(String(32))
+    pe_locked_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -75,7 +79,8 @@ class TeachingClass(Base):
     enrolled_count: Mapped[int] = mapped_column(Integer, default=0)
     audience: Mapped[str] = mapped_column(String(256), default="")
     campus: Mapped[str] = mapped_column(String(32), default="")
-    status: Mapped[str] = mapped_column(String(16), default="未开始")  # 未开始/录入中/已提交
+    # 未开始/录入中/已提交（教师提交体测后本班体测锁定，教师可自己撤回）；体育部还可按学期统一锁定，见 Semester.pe_locked
+    status: Mapped[str] = mapped_column(String(16), default="未开始")
     config: Mapped[dict | None] = mapped_column(JSON)  # 本班覆盖的项目与权重，空则用学期默认
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime)
     submitted_by: Mapped[str | None] = mapped_column(String(32))
@@ -171,8 +176,8 @@ class ScoreRecord(Base):
     b_status: Mapped[str] = mapped_column(String(8), default="正常")
     skill: Mapped[float | None] = mapped_column(Float)
     regular: Mapped[float | None] = mapped_column(Float)
-    note: Mapped[str] = mapped_column(String(256), default="")  # 作弊/违纪原因等
-    course_status: Mapped[str] = mapped_column(String(8), default="正常")  # 课程成绩特殊情况：正常/缓考/缺考/退课
+    note: Mapped[str] = mapped_column(String(256), default="")  # 违纪原因等
+    course_status: Mapped[str] = mapped_column(String(8), default="正常")  # 课程成绩特殊情况：正常/缓考/缺考/退课/休学
     computed: Mapped[dict] = mapped_column(JSON, default=dict)
     standard_version: Mapped[str] = mapped_column(String(16), default="GB2014")
     updated_by: Mapped[str] = mapped_column(String(32), default="")
@@ -195,6 +200,7 @@ class ScoreHistory(Base):
 
 
 class UnlockRequest(Base):
+    """停用：教师申请撤回、体育部审核的记录。现在教师直接撤回提交，表保留只为不丢旧数据。"""
     __tablename__ = "unlock_requests"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     class_id: Mapped[int] = mapped_column(ForeignKey("classes.id"), index=True)
@@ -248,6 +254,18 @@ def init_db():
         fcntl.flock(lock, fcntl.LOCK_EX)
         Base.metadata.create_all(engine)
         _add_missing_columns()
+        _migrate_data()
+
+
+def _migrate_data():
+    """老数据升级，可重复执行。成绩留痕里的历史值不改。
+    - 体测状态：缺考 → 课上未测，作弊 → 违纪（都记 0 分，备注不动）。"""
+    from sqlalchemy import update
+    from .scoring import LEGACY_STATUSES
+    with engine.begin() as conn:
+        for old, new in LEGACY_STATUSES.items():
+            conn.execute(update(ScoreRecord).where(ScoreRecord.a_status == old).values(a_status=new))
+            conn.execute(update(ScoreRecord).where(ScoreRecord.b_status == old).values(b_status=new))
 
 
 def _add_missing_columns():

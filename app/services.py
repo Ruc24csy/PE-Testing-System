@@ -41,9 +41,10 @@ def excellence(rows: list[dict]) -> dict:
 
 
 INPUT_FIELDS = ("a_raw", "a_status", "b_raw", "b_status", "skill", "regular", "note", "course_status")
-# 只有体测需要提交：提交后锁定的只是两项体测的成绩和特殊状态
+# 体测锁定（教师提交后，或体育部按学期锁定后）锁的只是两项体测的成绩和特殊状态
 PE_FIELDS = ("a_raw", "a_status", "b_raw", "b_status")
-PE_LOCKED_MSG = "本班体测成绩已提交并锁定，如需更正请提交撤回申请"
+SEM_LOCKED_MSG = "本学期体测成绩已由体育部锁定，如需更正请联系体育部"
+SUBMITTED_MSG = "本班体测成绩已提交并锁定，如需更正请先撤回提交"
 
 
 def log(db: Session, actor: str, action: str, target: str = "", semester_id: int | None = None,
@@ -56,14 +57,24 @@ def class_config(c: TeachingClass, sem: Semester) -> dict:
 
 
 def can_edit(c: TeachingClass, sem: Semester) -> tuple[bool, str]:
-    """学期层面能不能录入。体测提交后的锁定按字段判断，见 pe_locked。"""
+    """学期层面能不能录入。体测锁定按字段判断，见 pe_locked。"""
     if not sem.is_current and not sem.entry_open:
         return False, "以往学期为只读；需补录或更正时请联系体育部开放录入窗口"
     return True, ""
 
 
+def sem_locked(c: TeachingClass) -> bool:
+    """体育部在管理端一键锁定了本学期全部班级的体测。"""
+    return bool(c.semester and c.semester.pe_locked)
+
+
 def pe_locked(c: TeachingClass) -> bool:
-    return c.status == "已提交"
+    """本班体测锁定：教师已提交，或体育部锁定了整个学期。"""
+    return c.status == "已提交" or sem_locked(c)
+
+
+def pe_locked_msg(c: TeachingClass) -> str:
+    return SEM_LOCKED_MSG if sem_locked(c) else SUBMITTED_MSG
 
 
 def student_display(e: Enrollment, stu: Student | None) -> dict:
@@ -216,6 +227,7 @@ def parse_cell(field: str, text, cfg: dict, gender: str | None):
     if field == "regular":
         return scoring.score_parse_simple(text, 0, round(cfg.get("regular_weight", 0.1) * 100, 1), "平时成绩")
     if field in ("a_status", "b_status"):
+        text = scoring.normalize_status(str(text).strip())
         if text not in scoring.STATUSES:
             raise scoring.ParseError("成绩状态只能是：" + "／".join(scoring.STATUSES))
         return text
@@ -268,7 +280,7 @@ def save_cells(db: Session, c: TeachingClass, sem: Semester, changes: list[dict]
             results.append({**ch, "ok": False, "error": "行或字段不存在"})
             continue
         if locked and field in PE_FIELDS:
-            results.append({**ch, "ok": False, "error": PE_LOCKED_MSG})
+            results.append({**ch, "ok": False, "error": pe_locked_msg(c)})
             continue
         stu = stus.get(e.student_no)
         gender = stu.gender if stu else None
@@ -280,6 +292,8 @@ def save_cells(db: Session, c: TeachingClass, sem: Semester, changes: list[dict]
             continue
         if field in ("a_status", "b_status", "course_status") and val is None:
             val = "正常"
+        if field == "note" and val is None:  # 清空备注：存空串（列不允许为空）
+            val = ""
         raw_field = field.replace("_status", "_raw")
         if field in ("a_raw", "b_raw") and val is not None and rec and (getattr(rec, field[0] + "_status") or "正常") != "正常":
             results.append({**ch, "ok": False, "error": "该项已选择特殊状态，数值与状态互斥；请先把状态改回“正常实测”"})
@@ -437,6 +451,22 @@ def submit_check(rows: list[dict], cfg: dict) -> dict:
             "blocking": bool(lists["pending"]) or bool(lists["missing"])}
 
 
+# ---------------------------------------------------------------- 体测填了 0 的提醒
+
+def pe_zeros(rows: list[dict], cfg: dict) -> list[dict]:
+    """体测成绩填了 0（状态为正常）的学生和项目。老师常把没来测的学生填 0，录入页据此提醒改标“课上未测”。"""
+    out = []
+    for r in rows:
+        v = r["values"]
+        items = [{"key": s["key"], "label": r["display"][s["key"]]["item_label"] or s.get("label", s["key"])}
+                 for s in cfg["slots"]
+                 if v.get(f"{s['key']}_status") == "正常" and v.get(f"{s['key']}_raw") == 0]
+        if items:
+            out.append({"enrollment_id": r["enrollment_id"], "seq": r["seq"], "student_no": r["student_no"],
+                        "name": r["name"], "items": items})
+    return out
+
+
 def is_missing(r: dict) -> bool:
     """与录入页“未录入”筛选一致：课程成绩标了特殊情况的只看两项体测。"""
     v = r["values"]
@@ -467,7 +497,7 @@ def sort_rows(rows: list[dict], by: str) -> list[dict]:
 # ---------------------------------------------------------------- 回退一次跨班导入
 
 def revert_batch(db: Session, sem: Semester, batch: str, operator: str) -> int | None:
-    """把一次导入写入的格子改回导入前的值。导入后又被改过的格子、体测已提交班的体测成绩不动。
+    """把一次导入写入的格子改回导入前的值。导入后又被改过的格子、体测已提交或已锁定的班的体测成绩不动。
     返回改回的格数；没有这次导入的记录时返回 None。"""
     q = (select(ScoreHistory, Enrollment).join(Enrollment, Enrollment.id == ScoreHistory.enrollment_id)
          .where(ScoreHistory.batch == batch, Enrollment.semester_id == sem.id).order_by(ScoreHistory.id.desc()))

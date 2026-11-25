@@ -47,7 +47,7 @@ def row_values(sem: Semester, c: TeachingClass, r: dict, cfg) -> list:
 
 
 def total_cell(r: dict):
-    """总成绩格：课程成绩标了缓考／缺考／退课时直接写状态。"""
+    """总成绩格：课程成绩标了缓考／缺考／退课／休学时直接写状态。"""
     course = r.get("course_status") or "正常"
     return course if course != "正常" else r["total"]
 
@@ -89,7 +89,7 @@ def build_workbook(sem: Semester, sections: list[tuple[TeachingClass, list[dict]
     info.append(["导出时间", now().strftime("%Y-%m-%d %H:%M:%S")])
     info.append(["导出人", exporter])
     info.append(["口径", "折算分保留两位小数；体测小计保留两位小数；课程总成绩四舍五入保留一位小数。"
-                        "免测不参与换算；缓测计为缺项；缺考、作弊、违纪记0分。"])
+                        "免测不参与换算；缓测计为缺项；课上未测、违纪记0分。"])
     info.column_dimensions["A"].width = 36
     info.column_dimensions["B"].width = 90
     buf = io.BytesIO()
@@ -123,7 +123,7 @@ def build_template(sem: Semester, c: TeachingClass, rows: list[dict], cfg) -> by
     note = wb.create_sheet("填写说明")
     for line in [f"{sem.name} {c.class_name}（{c.class_no}）", "按学号匹配，请勿修改学号列。",
                  "耐力跑可写 3'40\"、3:40、3分40秒、340、220秒；立定跳远写厘米数。",
-                 "状态留空表示正常实测；可填 免测／缓测／缺考／作弊／违纪。",
+                 "状态留空表示正常实测；可填 免测／缓测／课上未测／违纪。",
                  f"运动技能评定 0—{cfg['skill_weight'] * 100:g} 分，平时成绩 0—{cfg['regular_weight'] * 100:g} 分，支持0.5分步进。",
                  "空单元格表示不修改该项。"]:
         note.append([line])
@@ -199,7 +199,7 @@ def build_class_workbook(sem: Semester, c: TeachingClass, rows: list[dict], cfg,
     info.append(["导出时间", now().strftime("%Y-%m-%d %H:%M:%S")])
     info.append(["导出人", exporter])
     info.append(["口径", "折算分保留两位小数；体测小计保留两位小数；课程总成绩四舍五入保留一位小数。"
-                        "课程成绩标了缓考、缺考、退课的，总成绩格写状态。"])
+                        "课程成绩标了缓考、缺考、退课、休学的，总成绩格写状态。"])
     info.column_dimensions["A"].width = 24
     info.column_dimensions["B"].width = 90
     buf = io.BytesIO()

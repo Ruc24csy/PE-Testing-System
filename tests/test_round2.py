@@ -149,7 +149,7 @@ def test_course_status_and_pe_submit(env):
     ov = admin.get(f"/api/admin/semesters/{sid}/overview").json()["class_list"]
     assert next(c for c in ov if c["id"] == cid)["submitted"]
     d = t.get(f"/api/classes/{cid}").json()
-    assert d["editable"] and d["pe_locked"]
+    assert d["editable"] and d["pe_locked"] and not d["sem_locked"]
     # 提交后：课程特殊情况、技能、备注能改；体测不能改；性别、标准档不能改，姓名能改
     res = t.post(f"/api/classes/{cid}/cells", json={"changes": [
         {"enrollment_id": ids["2027100003"], "field": "course_status", "value": "缓考"},

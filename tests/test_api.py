@@ -1,4 +1,4 @@
-"""接口全流程：建学期 → 导入三张表 → 教师录入 → 提交前校验 → 体育部确认标准档 → 提交 → 撤回 → 导出。"""
+"""接口全流程：建学期 → 导入三张表 → 教师录入 → 提交前校验 → 体育部确认标准档 → 提交 → 撤回提交 → 体育部锁定、解锁 → 导出。"""
 import io
 
 import openpyxl
@@ -186,18 +186,43 @@ def test_full_flow(admin, teacher):
     assert r.status_code == 200
     ok = {x["field"]: x["ok"] for x in r.json()["results"]}
     assert ok == {"skill": True, "a_raw": False, "b_status": False}
+    assert "撤回提交" in r.json()["results"][1]["error"]
     assert teacher.put(f"/api/classes/{cid}/config", json={"cfg": cfg}).status_code == 403
     teacher.post(f"/api/classes/{cid}/cells", json={"changes": [{"enrollment_id": e2, "field": "skill", "value": ""}]})
-    assert teacher.post(f"/api/classes/{cid}/unlock-request", json={"reason": "录错一人"}).status_code == 200
-    ul = admin.get("/api/admin/unlock-requests").json()[0]
-    # 驳回必须写原因：空的、只有空格的都拒绝，申请仍是待审核，班级仍锁着
-    for blank in ("", "   "):
-        r = admin.post(f"/api/admin/unlock-requests/{ul['id']}", json={"approve": False, "note": blank})
-        assert r.status_code == 400 and "驳回原因" in r.json()["detail"]
-    assert admin.get("/api/admin/unlock-requests").json()[0]["status"] == "待审核"
-    assert teacher.get(f"/api/classes/{cid}").json()["class"]["status"] != "录入中"
-    assert admin.post(f"/api/admin/unlock-requests/{ul['id']}", json={"approve": True, "note": ""}).status_code == 200
+    # 撤回提交：教师直接撤回，不填原因、不用审核
+    assert teacher.post(f"/api/classes/{cid}/withdraw").status_code == 200
     assert teacher.get(f"/api/classes/{cid}").json()["class"]["status"] == "录入中"
+    assert teacher.post(f"/api/classes/{cid}/withdraw").status_code == 400  # 没提交不用撤回
+    assert teacher.post(f"/api/classes/{cid}/cells", json={"changes": [
+        {"enrollment_id": e3, "field": "b_status", "value": "免测"}]}).json()["results"][0]["ok"] is True
+
+    # 体育部按学期一键锁定：教师不能锁；没提交的班也锁住体测，其他成绩照常能改
+    assert teacher.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": True}).status_code == 403
+    ov = admin.get(f"/api/admin/semesters/{sid}/overview").json()
+    assert ov["pe_submitted"] == 0 and not next(c for c in ov["class_list"] if c["id"] == cid)["submitted"]
+    r = admin.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": True})
+    assert r.status_code == 200 and r.json()["pe_locked"] and r.json()["pe_locked_by"] == "admin01"
+    d = teacher.get(f"/api/classes/{cid}").json()
+    assert d["pe_locked"] and d["sem_locked"] and d["editable"] and "体育部锁定" in d["readonly_reason"]
+    r = teacher.post(f"/api/classes/{cid}/cells", json={"changes": [
+        {"enrollment_id": e2, "field": "skill", "value": "50"},
+        {"enrollment_id": e2, "field": "a_raw", "value": "3:30"}]}).json()
+    assert [x["ok"] for x in r["results"]] == [True, False] and "体育部" in r["results"][1]["error"]
+    teacher.post(f"/api/classes/{cid}/cells", json={"changes": [{"enrollment_id": e2, "field": "skill", "value": ""}]})
+    # 锁定后提交照常能记，但不能撤回
+    assert teacher.post(f"/api/classes/{cid}/submit").status_code == 200
+    r = teacher.post(f"/api/classes/{cid}/withdraw")
+    assert r.status_code == 403 and "体育部" in r.json()["detail"]
+    # 解锁后已提交的班仍锁着，教师可以自己撤回
+    assert admin.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": False}).status_code == 200
+    assert teacher.get(f"/api/classes/{cid}").json()["pe_locked"] is True
+    assert teacher.post(f"/api/classes/{cid}/withdraw").status_code == 200
+    assert teacher.put(f"/api/classes/{cid}/config", json={"cfg": cfg}).status_code == 200
+    acts = [x["action"] for x in admin.get(f"/api/admin/logs?semester_id={sid}").json()["logs"]]
+    assert {"提交", "撤回提交", "锁定体测", "解锁体测"} <= set(acts)
+    # 管理员审核撤回的流程已删
+    assert teacher.post(f"/api/classes/{cid}/unlock-request", json={"reason": "x"}).status_code in (404, 405)
+    assert admin.get("/api/admin/unlock-requests").status_code in (404, 405)
 
     # 留痕
     h = teacher.get(f"/api/classes/{cid}/history/{e1}").json()
@@ -237,7 +262,7 @@ def test_full_flow(admin, teacher):
 
     logs = admin.get(f"/api/admin/logs?semester_id={sid}").json()
     actions = {l["action"] for l in logs["logs"]}
-    assert {"导入", "保存", "提交", "撤回申请", "撤回审核", "改档", "导出", "配置"} <= actions
+    assert {"导入", "保存", "提交", "撤回提交", "锁定体测", "解锁体测", "改档", "导出", "配置"} <= actions
 
     # 以往学期只读
     sem2 = admin.post("/api/admin/semesters", json={"start_year": 2026, "season": "spring"}).json()
