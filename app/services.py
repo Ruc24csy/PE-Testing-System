@@ -1,4 +1,4 @@
-"""成绩录入相关的业务逻辑：班级配置、行数据、保存、校验。"""
+"""成绩录入相关的业务逻辑：班级配置、行数据、保存、校验、提交。"""
 from __future__ import annotations
 
 import copy
@@ -41,9 +41,10 @@ def excellence(rows: list[dict]) -> dict:
 
 
 INPUT_FIELDS = ("a_raw", "a_status", "b_raw", "b_status", "skill", "regular", "note", "course_status")
-# 体育部按学期锁定体测后，锁定的只是两项体测的成绩和特殊状态
+# 体测锁定（教师提交后，或体育部按学期锁定后）锁的只是两项体测的成绩和特殊状态
 PE_FIELDS = ("a_raw", "a_status", "b_raw", "b_status")
-PE_LOCKED_MSG = "本学期体测成绩已由体育部锁定，如需更正请联系体育部"
+SEM_LOCKED_MSG = "本学期体测成绩已由体育部锁定，如需更正请联系体育部"
+SUBMITTED_MSG = "本班体测成绩已提交并锁定，如需更正请先撤回提交"
 
 
 def log(db: Session, actor: str, action: str, target: str = "", semester_id: int | None = None,
@@ -62,9 +63,18 @@ def can_edit(c: TeachingClass, sem: Semester) -> tuple[bool, str]:
     return True, ""
 
 
-def pe_locked(c: TeachingClass) -> bool:
-    """体测锁定是学期级的：体育部在管理端一键锁定本学期全部班级。"""
+def sem_locked(c: TeachingClass) -> bool:
+    """体育部在管理端一键锁定了本学期全部班级的体测。"""
     return bool(c.semester and c.semester.pe_locked)
+
+
+def pe_locked(c: TeachingClass) -> bool:
+    """本班体测锁定：教师已提交，或体育部锁定了整个学期。"""
+    return c.status == "已提交" or sem_locked(c)
+
+
+def pe_locked_msg(c: TeachingClass) -> str:
+    return SEM_LOCKED_MSG if sem_locked(c) else SUBMITTED_MSG
 
 
 def student_display(e: Enrollment, stu: Student | None) -> dict:
@@ -270,7 +280,7 @@ def save_cells(db: Session, c: TeachingClass, sem: Semester, changes: list[dict]
             results.append({**ch, "ok": False, "error": "行或字段不存在"})
             continue
         if locked and field in PE_FIELDS:
-            results.append({**ch, "ok": False, "error": PE_LOCKED_MSG})
+            results.append({**ch, "ok": False, "error": pe_locked_msg(c)})
             continue
         stu = stus.get(e.student_no)
         gender = stu.gender if stu else None
@@ -413,6 +423,34 @@ def recompute_students(db: Session, sem: Semester, nos: set[str]):
         recompute_class(db, db.get(TeachingClass, cid), sem)
 
 
+# ---------------------------------------------------------------- 提交前校验
+
+def submit_check(rows: list[dict], cfg: dict) -> dict:
+    """只有体测需要提交，校验只看两项体测；运动技能、平时成绩提交后照样能改，不在这里查。"""
+    lists = defaultdict(list)
+    for r in rows:
+        who = f"{r['seq']}. {r['student_no']} {r['name']}"
+        missing = []
+        for slot in cfg["slots"]:
+            k = slot["key"]
+            v = r["values"]
+            if v.get(f"{k}_status") == "正常" and v.get(f"{k}_raw") is None:
+                missing.append(r["display"][k]["item_label"] or slot.get("label", k))
+        if missing:
+            lists["missing"].append(f"{who}：{'、'.join(missing)}")
+        if r["pending"] or r["gender_code"] is None:
+            lists["pending"].append(f"{who}：{'；'.join(r['pending_reasons'] or ['性别待确认'])}")
+        for k, d in r["display"].items():
+            if d["bonus"] and d["bonus"] > 10:
+                lists["bonus"].append(f"{who}：{d['item_label']}加分{d['bonus']:g}超过上限")
+        for s in r["sudden"]:
+            lists["sudden"].append(f"{who}：{s}")
+    # 体测两项都要填了或标了特殊情况，且没有年级/性别待确认的学生
+    return {"missing": lists["missing"], "pending": lists["pending"], "bonus": lists["bonus"],
+            "sudden": lists["sudden"],
+            "blocking": bool(lists["pending"]) or bool(lists["missing"])}
+
+
 # ---------------------------------------------------------------- 体测填了 0 的提醒
 
 def pe_zeros(rows: list[dict], cfg: dict) -> list[dict]:
@@ -459,7 +497,7 @@ def sort_rows(rows: list[dict], by: str) -> list[dict]:
 # ---------------------------------------------------------------- 回退一次跨班导入
 
 def revert_batch(db: Session, sem: Semester, batch: str, operator: str) -> int | None:
-    """把一次导入写入的格子改回导入前的值。导入后又被改过的格子、体测已锁定时的体测成绩不动。
+    """把一次导入写入的格子改回导入前的值。导入后又被改过的格子、体测已提交或已锁定的班的体测成绩不动。
     返回改回的格数；没有这次导入的记录时返回 None。"""
     q = (select(ScoreHistory, Enrollment).join(Enrollment, Enrollment.id == ScoreHistory.enrollment_id)
          .where(ScoreHistory.batch == batch, Enrollment.semester_id == sem.id).order_by(ScoreHistory.id.desc()))

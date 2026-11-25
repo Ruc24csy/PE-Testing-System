@@ -1,4 +1,4 @@
-"""接口全流程：建学期 → 导入三张表 → 教师录入 → 体育部确认标准档 → 体育部锁定体测 → 解锁 → 导出。"""
+"""接口全流程：建学期 → 导入三张表 → 教师录入 → 提交前校验 → 体育部确认标准档 → 提交 → 撤回提交 → 体育部锁定、解锁 → 导出。"""
 import io
 
 import openpyxl
@@ -141,11 +141,9 @@ def test_full_flow(admin, teacher):
     r = teacher.post(f"/api/classes/{cid}/cells", json={"changes": [{"enrollment_id": e3, "field": "b_raw", "value": "250"}]}).json()
     assert r["results"][0]["ok"] is False
 
-    # 教师提交、撤回流程已删：接口不在了
-    assert teacher.get(f"/api/classes/{cid}/check").status_code in (404, 405)
-    assert teacher.post(f"/api/classes/{cid}/submit").status_code in (404, 405)
-    assert teacher.post(f"/api/classes/{cid}/unlock-request", json={"reason": "x"}).status_code in (404, 405)
-    assert admin.get("/api/admin/unlock-requests").status_code in (404, 405)
+    chk = teacher.get(f"/api/classes/{cid}/check").json()
+    assert chk["blocking"] and len(chk["pending"]) == 1 and chk["missing"]
+    assert teacher.post(f"/api/classes/{cid}/submit").status_code == 400
 
     # 体育部改档：赵四实际按 2024 级（大三）算，写入异动记录后按大三大四计算
     pend = admin.get(f"/api/admin/semesters/{sid}/pending").json()
@@ -169,16 +167,18 @@ def test_full_flow(admin, teacher):
     cfg["skill_weight"] = 0.6
     teacher.put(f"/api/classes/{cid}/config", json={"cfg": cfg})
 
-    # 体测锁定由体育部按学期一键操作：教师不能锁
-    assert teacher.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": True}).status_code == 403
-    assert teacher.get(f"/api/classes/{cid}").json()["pe_locked"] is False
-    r = admin.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": True})
-    assert r.status_code == 200 and r.json()["pe_locked"] and r.json()["pe_locked_by"] == "admin01"
-    ov = admin.get(f"/api/admin/semesters/{sid}/overview").json()
-    assert ov["semester"]["pe_locked"] and ov["semester"]["pe_locked_at"]
+    # 只交体测：体测还有没录完的（没填也没标特殊情况）不能提交；运动技能、平时成绩不查
+    r = teacher.post(f"/api/classes/{cid}/submit")
+    assert r.status_code == 400 and "体测" in r.json()["detail"]
     d = teacher.get(f"/api/classes/{cid}").json()
-    assert d["pe_locked"] and d["editable"] and "锁定" in d["readonly_reason"]
-    # 锁定后只锁体测：运动技能能改，体测成绩和状态不能改
+    fill = []
+    for x in d["rows"]:
+        for k in ("a", "b"):
+            if x["values"][f"{k}_status"] == "正常" and x["values"][f"{k}_raw"] is None:
+                fill.append({"enrollment_id": x["enrollment_id"], "field": f"{k}_status", "value": "缓测"})
+    teacher.post(f"/api/classes/{cid}/cells", json={"changes": fill})
+    assert teacher.post(f"/api/classes/{cid}/submit").status_code == 200
+    # 提交后只锁体测：运动技能能改，体测成绩和状态不能改
     r = teacher.post(f"/api/classes/{cid}/cells", json={"changes": [
         {"enrollment_id": e2, "field": "skill", "value": "50"},
         {"enrollment_id": e2, "field": "a_raw", "value": "3:30"},
@@ -186,16 +186,43 @@ def test_full_flow(admin, teacher):
     assert r.status_code == 200
     ok = {x["field"]: x["ok"] for x in r.json()["results"]}
     assert ok == {"skill": True, "a_raw": False, "b_status": False}
+    assert "撤回提交" in r.json()["results"][1]["error"]
     assert teacher.put(f"/api/classes/{cid}/config", json={"cfg": cfg}).status_code == 403
     teacher.post(f"/api/classes/{cid}/cells", json={"changes": [{"enrollment_id": e2, "field": "skill", "value": ""}]})
-    # 解锁后体测又能改；锁定、解锁都记操作日志
-    assert admin.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": False}).status_code == 200
+    # 撤回提交：教师直接撤回，不填原因、不用审核
+    assert teacher.post(f"/api/classes/{cid}/withdraw").status_code == 200
+    assert teacher.get(f"/api/classes/{cid}").json()["class"]["status"] == "录入中"
+    assert teacher.post(f"/api/classes/{cid}/withdraw").status_code == 400  # 没提交不用撤回
+    assert teacher.post(f"/api/classes/{cid}/cells", json={"changes": [
+        {"enrollment_id": e3, "field": "b_status", "value": "免测"}]}).json()["results"][0]["ok"] is True
+
+    # 体育部按学期一键锁定：教师不能锁；没提交的班也锁住体测，其他成绩照常能改
+    assert teacher.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": True}).status_code == 403
+    ov = admin.get(f"/api/admin/semesters/{sid}/overview").json()
+    assert ov["pe_submitted"] == 0 and not next(c for c in ov["class_list"] if c["id"] == cid)["submitted"]
+    r = admin.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": True})
+    assert r.status_code == 200 and r.json()["pe_locked"] and r.json()["pe_locked_by"] == "admin01"
+    d = teacher.get(f"/api/classes/{cid}").json()
+    assert d["pe_locked"] and d["sem_locked"] and d["editable"] and "体育部锁定" in d["readonly_reason"]
     r = teacher.post(f"/api/classes/{cid}/cells", json={"changes": [
-        {"enrollment_id": e3, "field": "b_status", "value": "正常"}]}).json()
-    assert r["results"][0]["ok"] is True
+        {"enrollment_id": e2, "field": "skill", "value": "50"},
+        {"enrollment_id": e2, "field": "a_raw", "value": "3:30"}]}).json()
+    assert [x["ok"] for x in r["results"]] == [True, False] and "体育部" in r["results"][1]["error"]
+    teacher.post(f"/api/classes/{cid}/cells", json={"changes": [{"enrollment_id": e2, "field": "skill", "value": ""}]})
+    # 锁定后提交照常能记，但不能撤回
+    assert teacher.post(f"/api/classes/{cid}/submit").status_code == 200
+    r = teacher.post(f"/api/classes/{cid}/withdraw")
+    assert r.status_code == 403 and "体育部" in r.json()["detail"]
+    # 解锁后已提交的班仍锁着，教师可以自己撤回
+    assert admin.post(f"/api/admin/semesters/{sid}/pe-lock", json={"locked": False}).status_code == 200
+    assert teacher.get(f"/api/classes/{cid}").json()["pe_locked"] is True
+    assert teacher.post(f"/api/classes/{cid}/withdraw").status_code == 200
     assert teacher.put(f"/api/classes/{cid}/config", json={"cfg": cfg}).status_code == 200
     acts = [x["action"] for x in admin.get(f"/api/admin/logs?semester_id={sid}").json()["logs"]]
-    assert "锁定体测" in acts and "解锁体测" in acts
+    assert {"提交", "撤回提交", "锁定体测", "解锁体测"} <= set(acts)
+    # 管理员审核撤回的流程已删
+    assert teacher.post(f"/api/classes/{cid}/unlock-request", json={"reason": "x"}).status_code in (404, 405)
+    assert admin.get("/api/admin/unlock-requests").status_code in (404, 405)
 
     # 留痕
     h = teacher.get(f"/api/classes/{cid}/history/{e1}").json()
@@ -235,7 +262,7 @@ def test_full_flow(admin, teacher):
 
     logs = admin.get(f"/api/admin/logs?semester_id={sid}").json()
     actions = {l["action"] for l in logs["logs"]}
-    assert {"导入", "保存", "锁定体测", "解锁体测", "改档", "导出", "配置"} <= actions
+    assert {"导入", "保存", "提交", "撤回提交", "锁定体测", "解锁体测", "改档", "导出", "配置"} <= actions
 
     # 以往学期只读
     sem2 = admin.post("/api/admin/semesters", json={"start_year": 2026, "season": "spring"}).json()

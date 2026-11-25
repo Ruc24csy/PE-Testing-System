@@ -339,10 +339,12 @@ def get_class(cid: int, u: User = Depends(current_user), db: Session = Depends(g
     editable, why = services.can_edit(c, sem)
     locked = services.pe_locked(c)
     if editable and locked:
-        why = "本学期体测成绩已由体育部锁定，如需更正请联系体育部；运动技能、平时成绩、备注和课程成绩特殊情况仍可修改"
+        why = (services.SEM_LOCKED_MSG if services.sem_locked(c) else "本班体测成绩已提交并锁定，如需更正可撤回提交") + \
+            "；运动技能、平时成绩、备注和课程成绩特殊情况仍可修改"
     return {"semester": sem_dict(sem), "class": class_brief(c), "config": cfg,
             "config_labels": {s["key"]: {g: scoring.item_label(it) for g, it in s["items"].items()} for s in cfg["slots"]},
-            "editable": editable, "pe_locked": locked, "readonly_reason": why, "rows": rows,
+            "editable": editable, "pe_locked": locked, "sem_locked": services.sem_locked(c),
+            "readonly_reason": why, "rows": rows,
             "statuses": scoring.STATUSES, "course_statuses": scoring.COURSE_STATUSES,
             "standard_version": sem.standard_version, "pe_zeros": services.pe_zeros(rows, cfg)}
 
@@ -385,7 +387,7 @@ def update_class_config(cid: int, request: Request, cfg: dict = Body(..., embed=
     if not ok:
         raise HTTPException(403, why)
     if services.pe_locked(c):
-        raise HTTPException(403, services.PE_LOCKED_MSG)
+        raise HTTPException(403, services.pe_locked_msg(c))
     new = _validate_config(cfg)
     old = services.class_config(c, sem)
     # 已有原始成绩的项目不允许改成另一个项目（会让原始值失去意义），只能改权重
@@ -425,7 +427,7 @@ def teacher_edit_student(cid: int, eid: int, request: Request, body: dict = Body
     """教师在“更多”里直接改学生姓名、性别、学院和标准档，保存即生效、立即重算。
 
     学生基础数据跨学期共用：改后标为手动修改，之后导入基础数据表不覆盖。
-    标准档写成只对本学期生效的认定记录（第一优先），待确认的学生由教师定档后不再待确认。
+    标准档写成只对本学期生效的认定记录（第一优先），待确认的学生由教师定档后不再阻断提交。
     """
     c, sem = _class(db, cid, u)
     ok, why = services.can_edit(c, sem)
@@ -455,9 +457,15 @@ def teacher_edit_student(cid: int, eid: int, request: Request, body: dict = Body
     gender_changed = gender != before["gender"]
     band_needed = band is not None and (band != before["band"] or before["pending"])
     if gender_changed or (band is not None and band != before["band"]):
-        # 性别、标准档直接改变体测得分；体测锁定后不能再动
+        # 性别、标准档直接改变体测得分；体育部锁定学期、或该生所在的班体测已提交后不能再动
         if sem.pe_locked:
             raise HTTPException(403, "本学期体测成绩已由体育部锁定，不能再改性别或标准档；如需更正请联系体育部")
+        locked = db.scalar(select(TeachingClass).join(Enrollment, Enrollment.class_id == TeachingClass.id).where(
+            Enrollment.semester_id == sem.id, Enrollment.student_no == no, Enrollment.active.is_(True),
+            TeachingClass.status == "已提交"))
+        if locked:
+            raise HTTPException(403, f"该生所在的 {locked.class_name} 体测成绩已提交，不能再改性别或标准档；"
+                                     "如需更正请先撤回提交")
     changed = {k for k, v in (("name", name), ("college", college)) if v != before[k]}
     if gender_changed:
         changed.add("gender")
@@ -491,6 +499,50 @@ def teacher_edit_student(cid: int, eid: int, request: Request, body: dict = Body
                  fields=sorted(changed), old=before, new=after)
     db.commit()
     return {"ok": True, "changed": sorted(changed)}
+
+
+@app.get("/api/classes/{cid}/check")
+def check_class(cid: int, u: User = Depends(current_user), db: Session = Depends(get_db)):
+    c, sem = _class(db, cid, u)
+    return services.submit_check(services.load_class_rows(db, c, sem), services.class_config(c, sem))
+
+
+@app.post("/api/classes/{cid}/submit")
+def submit_class(cid: int, request: Request, u: User = Depends(current_user), db: Session = Depends(get_db)):
+    c, sem = _class(db, cid, u)
+    ok, why = services.can_edit(c, sem)
+    if not ok:
+        raise HTTPException(403, why)
+    if c.status == "已提交":
+        raise HTTPException(400, "本班体测成绩已经提交")
+    chk = services.submit_check(services.load_class_rows(db, c, sem), services.class_config(c, sem))
+    if chk["pending"]:
+        raise HTTPException(400, f"本班还有 {len(chk['pending'])} 名学生的年级或性别待确认，"
+                                 "可在该生的“更多”里核对后直接修改，或等体育部确认")
+    if chk["missing"]:
+        raise HTTPException(400, f"本班还有 {len(chk['missing'])} 名学生的体测成绩没有录完（没填成绩也没标特殊情况）")
+    c.status, c.submitted_at, c.submitted_by = "已提交", now(), u.staff_no
+    services.log(db, u.staff_no, "提交", f"{c.class_no} {c.class_name}", sem.id, ip=client_ip(request),
+                 missing=len(chk["missing"]), sudden=len(chk["sudden"]))
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/classes/{cid}/withdraw")
+def withdraw_class(cid: int, request: Request, u: User = Depends(current_user), db: Session = Depends(get_db)):
+    """教师撤回体测提交：直接解锁本班体测，不用填原因、不用体育部审核。体育部锁定了学期时不能撤回。"""
+    c, sem = _class(db, cid, u)
+    ok, why = services.can_edit(c, sem)
+    if not ok:
+        raise HTTPException(403, why)
+    if c.status != "已提交":
+        raise HTTPException(400, "本班体测成绩尚未提交，无需撤回")
+    if sem.pe_locked:
+        raise HTTPException(403, services.SEM_LOCKED_MSG)
+    c.status = "录入中"
+    services.log(db, u.staff_no, "撤回提交", f"{c.class_no} {c.class_name}", sem.id, ip=client_ip(request))
+    db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/classes/{cid}/history/{eid}")
@@ -1251,9 +1303,11 @@ def semester_overview(sid: int, u: User = Depends(admin_user), db: Session = Dep
         ((ScoreRecord.b_raw == 0) & (ScoreRecord.b_status == "正常"))).group_by(Enrollment.class_id)).all())
     locker = db.get(User, sem.pe_locked_by) if sem.pe_locked_by else None
     return {"semester": sem_dict(sem), "classes": sum(st.values()), "status": st,
-            "pe_locked_by_name": locker.name if locker else "",
+            "pe_submitted": st.get("已提交", 0), "pe_locked_by_name": locker.name if locker else "",
             "class_list": [{"id": c.id, "class_no": c.class_no, "course_name": c.course_name, "class_name": c.class_name,
-                            "teacher_name": c.teacher_name, "staff_no": c.staff_no, "zeros": zeros.get(c.id, 0)}
+                            "teacher_name": c.teacher_name, "staff_no": c.staff_no, "zeros": zeros.get(c.id, 0),
+                            "submitted": c.status == "已提交",
+                            "submitted_at": c.submitted_at.strftime("%Y-%m-%d %H:%M") if c.submitted_at and c.status == "已提交" else None}
                            for c in cls],
             "teacher_edits": db.scalar(select(func.count()).select_from(AuditLog).where(
                 AuditLog.semester_id == sid, AuditLog.action == "教师修改学生信息")),

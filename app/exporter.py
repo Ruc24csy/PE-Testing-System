@@ -47,7 +47,7 @@ def row_values(sem: Semester, c: TeachingClass, r: dict, cfg) -> list:
 
 
 def total_cell(r: dict):
-    """总成绩格：课程成绩标了缓考／缺考／退课时直接写状态。"""
+    """总成绩格：课程成绩标了缓考／缺考／退课／休学时直接写状态。"""
     course = r.get("course_status") or "正常"
     return course if course != "正常" else r["total"]
 
@@ -199,7 +199,7 @@ def build_class_workbook(sem: Semester, c: TeachingClass, rows: list[dict], cfg,
     info.append(["导出时间", now().strftime("%Y-%m-%d %H:%M:%S")])
     info.append(["导出人", exporter])
     info.append(["口径", "折算分保留两位小数；体测小计保留两位小数；课程总成绩四舍五入保留一位小数。"
-                        "课程成绩标了缓考、缺考、退课的，总成绩格写状态。"])
+                        "课程成绩标了缓考、缺考、退课、休学的，总成绩格写状态。"])
     info.column_dimensions["A"].width = 24
     info.column_dimensions["B"].width = 90
     buf = io.BytesIO()

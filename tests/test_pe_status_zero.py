@@ -1,4 +1,4 @@
-"""体测特殊情况改名（课上未测）与旧数据迁移、模板上传认旧写法、体测填 0 的提醒。"""
+"""体测特殊情况改名（课上未测）与旧数据迁移、模板上传认旧写法、体测填 0 的提醒、课程成绩休学。"""
 import io
 
 import openpyxl
@@ -85,9 +85,10 @@ def test_migrate_old_statuses(env):
     assert rows[NOS[0]]["values"]["a_status"] == "课上未测" and rows[NOS[0]]["display"]["a"]["score"] == 0
     assert rows[NOS[1]]["values"]["b_status"] == "违纪" and rows[NOS[1]]["values"]["note"] == "替考"
     with SessionLocal() as db:
-        assert db.get(TeachingClass, cid).status == "录入中"  # 停用的“已提交”改回录入中
+        assert db.get(TeachingClass, cid).status == "已提交"  # 迁移不动班级的提交状态
         assert db.scalar(select(ScoreHistory).where(ScoreHistory.enrollment_id == ids[NOS[0]],
                                                     ScoreHistory.operator == "old")).new == "缺考"
+    assert t.post(f"/api/classes/{cid}/withdraw").status_code == 200
     t.post(f"/api/classes/{cid}/cells", json={"changes": [
         {"enrollment_id": ids[NOS[0]], "field": "a_status", "value": "正常"},
         {"enrollment_id": ids[NOS[1]], "field": "b_status", "value": "正常"},
@@ -143,3 +144,20 @@ def test_zero_scores_listed_and_marking_missed(env):
     assert row["values"]["b_raw"] is None and row["values"]["b_status"] == "课上未测" and row["display"]["b"]["score"] == 0
     h = t.get(f"/api/classes/{cid}/history/{ids[NOS[0]]}").json()["history"]
     assert any(x["field"] == "b_raw" and x["old"] == "0.0" and x["new"] is None for x in h)
+
+
+def test_course_status_leave_of_absence(env):
+    """课程成绩特殊情况加了休学：和退课一样总成绩不算、显示状态，技能和平时可以不填。"""
+    t, cid = env["teacher"], env["cid"]
+    assert "休学" in t.get(f"/api/classes/{cid}").json()["course_statuses"]
+    eid = rows_of(t, cid)[NOS[3]]["enrollment_id"]
+    res = t.post(f"/api/classes/{cid}/cells", json={"changes": [
+        {"enrollment_id": eid, "field": "a_raw", "value": "3:50"},
+        {"enrollment_id": eid, "field": "b_raw", "value": "230"},
+        {"enrollment_id": eid, "field": "course_status", "value": "休学"}]}).json()
+    assert all(x["ok"] for x in res["results"])
+    row = rows_of(t, cid)[NOS[3]]
+    assert row["course_status"] == "休学" and row["total"] is None and row["complete"]
+    wb = openpyxl.load_workbook(io.BytesIO(t.get(f"/api/classes/{cid}/export?sort=no").content))
+    body = [[c.value for c in r] for r in wb["成绩"].iter_rows(min_row=3)]
+    assert next(b for b in body if b[1] == NOS[3])[4] == "休学"

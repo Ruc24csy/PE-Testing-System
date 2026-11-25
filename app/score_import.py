@@ -8,7 +8,7 @@
 - 肺活量、坐位体前屈、身高、体重平台不算分，不读。
 
 只写进学生在这一学期的体测项目：表里的项目不是该生本学期要测的，跳过。
-一人多条有效选课时每条都写（各班各自比较）；体测已锁定时、该项标了免测缓测等特殊状态的不改。
+一人多条有效选课时每条都写（各班各自比较）；体测已提交或已锁定的班、该项标了免测缓测等特殊状态的不改。
 同一学生同一项目，表里多条与系统里已有的成绩一起比，取最好的一个，不会用更差的成绩盖掉已有成绩。
 """
 from __future__ import annotations
@@ -195,7 +195,7 @@ def plan(db: Session, sem: Semester, entries: list[dict]) -> dict:
                 continue
             field = f"{slot['key']}_raw"
             if services.pe_locked(c):
-                skip(ent, "本学期体测成绩已锁定，未改", c, item)
+                skip(ent, "本班体测成绩已提交或已锁定，未改", c, item)
                 continue
             rec = recs.get(e.id)
             status = (getattr(rec, f"{slot['key']}_status") if rec else None) or "正常"
