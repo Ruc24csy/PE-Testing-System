@@ -1086,7 +1086,15 @@ async function adUnlock(el) {
   const rs = await api("/api/admin/unlock-requests");
   el.innerHTML = rs.length ? `<table class="list"><tr><th>时间</th><th>教学班</th><th>教师</th><th>原因</th><th>状态</th><th>操作</th></tr>${rs.map((r) => `<tr><td>${esc(r.at)}</td><td><a href="#/class/${r.class_id}">${esc(r.class_name)}</a></td><td>${esc(r.teacher)}</td><td>${esc(r.reason)}</td>
     <td>${esc(r.status)}${r.review_note ? `<div class="muted small">${esc(r.review_note)}</div>` : ""}</td><td>${r.status === "待审核" ? `<button data-ok="${r.id}">同意解锁</button> <button data-no="${r.id}">驳回</button>` : ""}</td></tr>`).join("")}</table>` : `<p class="muted">暂无撤回申请</p>`;
-  const act = async (id, approve) => { const note = prompt(approve ? "审核意见（可选）" : "驳回原因") ?? ""; await api(`/api/admin/unlock-requests/${id}`, { method: "POST", body: { approve, note } }); toast("已处理"); adUnlock(el); };
+  const act = async (id, approve) => {
+    // 点「取消」时 prompt 返回 null：什么也不做，申请保持待审核
+    const input = prompt(approve ? "审核意见（可选）" : "驳回原因（必填）");
+    if (input === null) return;
+    const note = input.trim();
+    if (!approve && !note) { toast("请填写驳回原因", true); return; }
+    try { await api(`/api/admin/unlock-requests/${id}`, { method: "POST", body: { approve, note } }); toast("已处理"); adUnlock(el); }
+    catch (e) { toast(e.message, true); }
+  };
   $$("[data-ok]", el).forEach((b) => (b.onclick = () => act(b.dataset.ok, true)));
   $$("[data-no]", el).forEach((b) => (b.onclick = () => act(b.dataset.no, false)));
 }
