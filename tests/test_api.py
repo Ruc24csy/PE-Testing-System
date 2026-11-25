@@ -190,6 +190,12 @@ def test_full_flow(admin, teacher):
     teacher.post(f"/api/classes/{cid}/cells", json={"changes": [{"enrollment_id": e2, "field": "skill", "value": ""}]})
     assert teacher.post(f"/api/classes/{cid}/unlock-request", json={"reason": "录错一人"}).status_code == 200
     ul = admin.get("/api/admin/unlock-requests").json()[0]
+    # 驳回必须写原因：空的、只有空格的都拒绝，申请仍是待审核，班级仍锁着
+    for blank in ("", "   "):
+        r = admin.post(f"/api/admin/unlock-requests/{ul['id']}", json={"approve": False, "note": blank})
+        assert r.status_code == 400 and "驳回原因" in r.json()["detail"]
+    assert admin.get("/api/admin/unlock-requests").json()[0]["status"] == "待审核"
+    assert teacher.get(f"/api/classes/{cid}").json()["class"]["status"] != "录入中"
     assert admin.post(f"/api/admin/unlock-requests/{ul['id']}", json={"approve": True, "note": ""}).status_code == 200
     assert teacher.get(f"/api/classes/{cid}").json()["class"]["status"] == "录入中"
 

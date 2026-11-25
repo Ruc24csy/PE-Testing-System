@@ -1239,6 +1239,9 @@ def review_unlock(rid: int, approve: bool = Body(...), note: str = Body(""), u: 
     r = db.get(UnlockRequest, rid)
     if not r or r.status != "待审核":
         raise HTTPException(404, "申请不存在或已处理")
+    note = (note or "").strip()
+    if not approve and not note:
+        raise HTTPException(400, "请填写驳回原因")
     r.status = "已同意" if approve else "已驳回"
     r.reviewer, r.review_note, r.reviewed_at = u.staff_no, note, now()
     c = db.get(TeachingClass, r.class_id)
