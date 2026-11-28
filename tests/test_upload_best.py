@@ -102,15 +102,18 @@ def test_template_layout(env):
     assert head[:3] == ["学号", "姓名", "性别"] and head[SK:] == ["运动技能评定", "平时成绩"] and len(head) == 7
     assert not any("状态" in h or h.startswith("课程成绩") for h in head)  # 状态并入成绩列
     ex = [c.value for c in ws[2]]
-    assert ex[0] == "示例" and ws.cell(row=2, column=1).fill.fgColor.rgb.endswith("FFF2CC")
-    assert "3'40\"" in ex[A] and "免测" in ex[A] and "选课未修" in ex[SK]
+    assert ex == ["示例", "示例", "男", "3'40\"（也可写 3:40、340）", "230", "51（0—60分，可到0.5分）",
+                  "8.5（0—10分，可到0.5分）"]
+    assert ws.cell(row=2, column=1).fill.fill_type is None and not ws.cell(row=2, column=4).font.italic
+    assert ws.freeze_panes is None
     body = {r[0].value: [c.value for c in r] for r in ws.iter_rows(min_row=3, max_row=2 + len(NOS))}
     assert list(body) == NOS
     assert body[NOS[0]][A] == "免测" and body[NOS[0]][B] == "230"          # 和平台显示一致
     assert body[NOS[1]][SK] == body[NOS[1]][RG] == "选课未修" and body[NOS[2]][SK] == 50
     assert ws.cell(row=3 + len(NOS), column=1).value is None
     notes = [ws.cell(row=i, column=1).value for i in range(4 + len(NOS), ws.max_row + 1)]
-    assert notes[0].startswith("填写说明") and not any("3'40" in n or "免测" in n for n in notes)
+    assert notes[0].startswith("填写说明") and not any("3'40" in n for n in notes)
+    assert any("免测" in n for n in notes) and any("选课未修" in n for n in notes)  # 特殊情况写法在底部说明
     # 原样上传：示例行、说明跳过；和平台一样的格子不显示
     up = upload(t, cid, wb)
     assert up["fills"] == [] and up["conflicts"] == [] and up["errors"] == [] and up["unknown"] == []

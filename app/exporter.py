@@ -98,7 +98,7 @@ def build_workbook(sem: Semester, sections: list[tuple[TeachingClass, list[dict]
 
 
 _EXAMPLE_RAW = {"run1000": "3'40\"（也可写 3:40、340）", "run800": "3'40\"（也可写 3:40、340）",
-                "run50": "7.5（秒）", "long_jump": "230（厘米）", "pull_up": "12（个）", "sit_up": "40（个）"}
+                "run50": "7.5", "long_jump": "230", "pull_up": "12", "sit_up": "40"}
 
 
 def _example_raw(slot: dict) -> str:
@@ -107,7 +107,7 @@ def _example_raw(slot: dict) -> str:
     for g, item in slot.get("items", {}).items():
         if not item:
             continue
-        text = _EXAMPLE_RAW.get(item) or f"{scoring.item_label(item)}写数字"
+        text = _EXAMPLE_RAW.get(item) or "写数字"
         if text not in out:
             out.append(text)
     return "；".join(out) or "写数字"
@@ -118,13 +118,11 @@ def _example_score(weight: float) -> str:
     return f"{round(hi * 0.85 * 2) / 2:g}（0—{hi:g}分，可到0.5分）"
 
 
-TEMPLATE_EXAMPLE_FILL = PatternFill("solid", fgColor="FFF2CC")
-
-
 def build_template(sem: Semester, c: TeachingClass, rows: list[dict], cfg) -> bytes:
     """录入模板：第1行表头，第2行示例（上传时跳过），然后是学生，名单下面是填写说明（上传时跳过）。
 
     格子和平台录入表一致：体测特殊情况写在该项成绩格里，课程成绩特殊情况写在运动技能、平时成绩两格里。
+    示例行和学生行一样是普通格式（2026-11-28 马霄宇定），特殊情况的写法放在底部说明里。
     """
     wb = Workbook()
     ws = wb.active
@@ -135,15 +133,8 @@ def build_template(sem: Semester, c: TeachingClass, rows: list[dict], cfg) -> by
     ws.append(heads)
     for cell in ws[1]:
         cell.font = Font(bold=True)
-    pe_st = "特殊情况写" + "／".join(s for s in scoring.STATUSES if s != "正常")
-    course_st = "课程成绩特殊情况写" + "／".join(s for s in scoring.COURSE_STATUSES if s != "正常")
-    ws.append(["示例", "（这一行不用删）", "男", f"{_example_raw(sa)}；{pe_st}", f"{_example_raw(sb)}；{pe_st}",
-               f"{_example_score(cfg.get('skill_weight', 0.6))}；{course_st}",
-               f"{_example_score(cfg.get('regular_weight', 0.1))}；特殊情况同左"])
-    for cell in ws[2]:
-        cell.fill = TEMPLATE_EXAMPLE_FILL
-        cell.font = Font(italic=True, color="7F6000")
-        cell.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.append(["示例", "示例", "男", _example_raw(sa), _example_raw(sb), _example_score(cfg.get("skill_weight", 0.6)),
+               _example_score(cfg.get("regular_weight", 0.1))])
     for r in rows:
         v = r["values"]
         course = v.get("course_status") or "正常"
@@ -152,18 +143,19 @@ def build_template(sem: Semester, c: TeachingClass, rows: list[dict], cfg) -> by
         sk = [course, course] if course != "正常" else [v["skill"], v["regular"]]
         ws.append([r["student_no"], r["name"], r["gender"], *pe, *sk])
     last = ws.max_row
-    for i, w in enumerate([14, 12, 6, 26, 26, 26, 22], start=1):
+    for i, w in enumerate([14, 12, 6, 24, 14, 22, 22], start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     for row in ws.iter_rows(min_row=3, max_row=last, max_col=1):
         for cell in row:
             cell.number_format = "@"
-    ws.freeze_panes = "A3"
     # 名单下面空一行写填写说明；示例行里已经说明的写法这里不重复
     ws.append([])
     notes = [f"填写说明（{sem.name} {c.class_name} {c.class_no}）",
              "按学号匹配，请勿修改学号列。第2行示例和这几行说明上传时会跳过，不用删。",
              "空格表示不修改。平台里空着的格子直接写入；平台里已有、和表里不一样的，上传时会列出来，逐格选用哪个。",
-             "课程成绩填了特殊情况的，总成绩不算，运动技能和平时成绩不用填分数。"]
+             f"{a}、{b}遇特殊情况，在该项成绩格里写" + "／".join(s for s in scoring.STATUSES if s != "正常") + "。",
+             "课程成绩遇特殊情况，在运动技能评定、平时成绩两格里都写"
+             + "／".join(s for s in scoring.COURSE_STATUSES if s != "正常") + "，总成绩不算，不用填分数。"]
     for k, line in enumerate(notes):
         ws.append([line])
         ws.cell(row=ws.max_row, column=1).font = Font(bold=k == 0, color="595959")

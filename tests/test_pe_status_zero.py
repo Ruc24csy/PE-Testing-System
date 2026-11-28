@@ -100,7 +100,7 @@ def test_template_upload_reads_old_names(env):
     tpl = openpyxl.load_workbook(io.BytesIO(t.get(f"/api/classes/{cid}/template").content))
     ws = tpl.worksheets[0]
     head = [c.value for c in ws[1]]
-    assert any("课上未测" in str(c.value) for c in ws[2])  # 示例行列出体测状态的写法
+    assert any("课上未测" in str(c.value) for c in ws["A"])  # 底部说明列出体测特殊情况的写法
     col = {h: i for i, h in enumerate(head)}
     a_st = head[3]  # 体测特殊情况直接写在成绩格里
     for r in ws.iter_rows(min_row=2):
