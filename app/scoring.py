@@ -30,7 +30,7 @@ LEGACY_STATUSES = {"缺考": "课上未测", "作弊": "违纪"}
 def normalize_status(text: str) -> str:
     return LEGACY_STATUSES.get(text, text)
 # 课程成绩特殊情况：非“正常”时总成绩不算，显示状态文字，运动技能和平时成绩可以不填
-COURSE_STATUSES = ["正常", "缓考", "缺考", "退课", "休学"]
+COURSE_STATUSES = ["正常", "缓考", "缺考", "退课", "休学", "选课未修"]
 
 
 def level_name(score: float | None) -> str | None:

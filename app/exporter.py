@@ -47,7 +47,7 @@ def row_values(sem: Semester, c: TeachingClass, r: dict, cfg) -> list:
 
 
 def total_cell(r: dict):
-    """总成绩格：课程成绩标了缓考／缺考／退课／休学时直接写状态。"""
+    """总成绩格：课程成绩标了缓考／缺考／退课／休学／选课未修时直接写状态。"""
     course = r.get("course_status") or "正常"
     return course if course != "正常" else r["total"]
 
@@ -97,36 +97,75 @@ def build_workbook(sem: Semester, sections: list[tuple[TeachingClass, list[dict]
     return buf.getvalue()
 
 
-TEMPLATE_HEADS = ["学号", "姓名", "耐力跑/项目一原始成绩", "项目一状态", "立定跳远/项目二原始成绩", "项目二状态",
-                  "运动技能评定", "平时成绩"]
+_EXAMPLE_RAW = {"run1000": "3'40\"（也可写 3:40、340）", "run800": "3'40\"（也可写 3:40、340）",
+                "run50": "7.5（秒）", "long_jump": "230（厘米）", "pull_up": "12（个）", "sit_up": "40（个）"}
+
+
+def _example_raw(slot: dict) -> str:
+    """示例行里体测成绩格的写法：按这个项目（男女可能不同）给一个示范值。"""
+    out = []
+    for g, item in slot.get("items", {}).items():
+        if not item:
+            continue
+        text = _EXAMPLE_RAW.get(item) or f"{scoring.item_label(item)}写数字"
+        if text not in out:
+            out.append(text)
+    return "；".join(out) or "写数字"
+
+
+def _example_score(weight: float) -> str:
+    hi = weight * 100
+    return f"{round(hi * 0.85 * 2) / 2:g}（0—{hi:g}分，可到0.5分）"
+
+
+TEMPLATE_EXAMPLE_FILL = PatternFill("solid", fgColor="FFF2CC")
 
 
 def build_template(sem: Semester, c: TeachingClass, rows: list[dict], cfg) -> bytes:
+    """录入模板：第1行表头，第2行示例（上传时跳过），然后是学生，名单下面是填写说明（上传时跳过）。"""
     wb = Workbook()
     ws = wb.active
     ws.title = "成绩录入"
-    a, b = cfg["slots"][0].get("label", "项目一"), cfg["slots"][1].get("label", "项目二")
-    heads = ["学号", "姓名", "性别", f"{a}原始成绩", f"{a}状态", f"{b}原始成绩", f"{b}状态", "运动技能评定", "平时成绩"]
+    sa, sb = cfg["slots"][0], cfg["slots"][1]
+    a, b = sa.get("label", "项目一"), sb.get("label", "项目二")
+    heads = ["学号", "姓名", "性别", f"{a}原始成绩", f"{a}状态", f"{b}原始成绩", f"{b}状态", "运动技能评定", "平时成绩",
+             "课程成绩特殊情况"]
     ws.append(heads)
     for cell in ws[1]:
         cell.font = Font(bold=True)
+    pe_status = "留空即正常；可填" + "／".join(s for s in scoring.STATUSES if s != "正常")
+    ws.append(["示例", "（这一行不用删）", "男", _example_raw(sa), pe_status, _example_raw(sb), pe_status,
+               _example_score(cfg.get("skill_weight", 0.6)), _example_score(cfg.get("regular_weight", 0.1)),
+               "留空即正常；可填" + "／".join(s for s in scoring.COURSE_STATUSES if s != "正常")])
+    for cell in ws[2]:
+        cell.fill = TEMPLATE_EXAMPLE_FILL
+        cell.font = Font(italic=True, color="7F6000")
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
     for r in rows:
         v = r["values"]
+        course = v.get("course_status") or "正常"
         ws.append([r["student_no"], r["name"], r["gender"], r["display"]["a"]["raw_text"] or None,
                    None if v["a_status"] == "正常" else v["a_status"], r["display"]["b"]["raw_text"] or None,
-                   None if v["b_status"] == "正常" else v["b_status"], v["skill"], v["regular"]])
+                   None if v["b_status"] == "正常" else v["b_status"], v["skill"], v["regular"],
+                   None if course == "正常" else course])
+    last = ws.max_row
     for i in range(1, len(heads) + 1):
-        ws.column_dimensions[get_column_letter(i)].width = 16
-    for row in ws.iter_rows(min_row=2, max_col=1):
+        ws.column_dimensions[get_column_letter(i)].width = 18
+    for row in ws.iter_rows(min_row=3, max_row=last, max_col=1):
         for cell in row:
             cell.number_format = "@"
-    note = wb.create_sheet("填写说明")
-    for line in [f"{sem.name} {c.class_name}（{c.class_no}）", "按学号匹配，请勿修改学号列。",
-                 "耐力跑可写 3'40\"、3:40、3分40秒、340、220秒；立定跳远写厘米数。",
-                 "状态留空表示正常实测；可填 免测／缓测／课上未测／违纪。",
-                 f"运动技能评定 0—{cfg['skill_weight'] * 100:g} 分，平时成绩 0—{cfg['regular_weight'] * 100:g} 分，支持0.5分步进。",
-                 "空单元格表示不修改该项。"]:
-        note.append([line])
+    ws.freeze_panes = "A3"
+    # 名单下面空一行写填写说明；示例行里已经说明的写法这里不重复
+    ws.append([])
+    notes = [f"填写说明（{sem.name} {c.class_name} {c.class_no}）",
+             "按学号匹配，请勿修改学号列。第2行示例和这几行说明上传时会跳过，不用删。",
+             "空格表示不修改。成绩格和系统里已有的成绩比较，表里的更好才写入（跑步取用时短的，其余取大的）；"
+             "要把成绩改低，请在网页里改。",
+             "状态列填了就以表里为准。体测项状态不是正常时，表里该项成绩不写入；要录成绩，状态格填“正常”。",
+             "课程成绩填了特殊情况的，总成绩不算，运动技能和平时成绩可以不填。"]
+    for k, line in enumerate(notes):
+        ws.append([line])
+        ws.cell(row=ws.max_row, column=1).font = Font(bold=k == 0, color="595959")
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -199,7 +238,7 @@ def build_class_workbook(sem: Semester, c: TeachingClass, rows: list[dict], cfg,
     info.append(["导出时间", now().strftime("%Y-%m-%d %H:%M:%S")])
     info.append(["导出人", exporter])
     info.append(["口径", "折算分保留两位小数；体测小计保留两位小数；课程总成绩四舍五入保留一位小数。"
-                        "课程成绩标了缓考、缺考、退课、休学的，总成绩格写状态。"])
+                        "课程成绩标了缓考、缺考、退课、休学、选课未修的，总成绩格写状态。"])
     info.column_dimensions["A"].width = 24
     info.column_dimensions["B"].width = 90
     buf = io.BytesIO()

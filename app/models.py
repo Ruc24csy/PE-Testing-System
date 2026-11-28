@@ -177,7 +177,7 @@ class ScoreRecord(Base):
     skill: Mapped[float | None] = mapped_column(Float)
     regular: Mapped[float | None] = mapped_column(Float)
     note: Mapped[str] = mapped_column(String(256), default="")  # 违纪原因等
-    course_status: Mapped[str] = mapped_column(String(8), default="正常")  # 课程成绩特殊情况：正常/缓考/缺考/退课/休学
+    course_status: Mapped[str] = mapped_column(String(8), default="正常")  # 课程成绩特殊情况：正常/缓考/缺考/退课/休学/选课未修
     computed: Mapped[dict] = mapped_column(JSON, default=dict)
     standard_version: Mapped[str] = mapped_column(String(16), default="GB2014")
     updated_by: Mapped[str] = mapped_column(String(32), default="")

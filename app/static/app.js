@@ -316,7 +316,7 @@ function renderClass(C) {
       ${d.editable && c.status !== "已提交" ? `<button class="primary" id="submitBtn" title="提交后两项体测成绩锁定；运动技能、平时成绩仍可修改">提交体测成绩</button>` : ""}
       ${d.editable && c.status === "已提交" && !d.sem_locked ? `<button id="withdrawBtn" title="直接撤回，不用体育部审核">撤回提交</button>` : ""}
     </div>
-    <div class="muted small">填完一格按回车，先到右边一格，一行填完再到下一位学生；↑↓ 上下换格。耐力跑填完“分”会自动跳到“秒”。修改会自动保存。只有体测需要提交，体测录完后点“提交体测成绩”。体测填 0 时会问一句学生是不是没来测，要标特殊情况就点框里的“标记特殊情况”。免测、课上未测、缓考、退课、休学等特殊情况和学生信息修改点每行的“更多”。</div>
+    <div class="muted small">填完一格按回车，先到右边一格，一行填完再到下一位学生；↑↓ 上下换格。耐力跑填完“分”会自动跳到“秒”。修改会自动保存。只有体测需要提交，体测录完后点“提交体测成绩”。体测填 0 时会问一句学生是不是没来测，要标特殊情况就点框里的“标记特殊情况”。免测、课上未测、缓考、退课、休学、选课未修等特殊情况和学生信息修改点每行的“更多”。</div>
   </div>
   <div class="grid-wrap"><table class="grid" id="grid">
     <thead><tr>
@@ -386,7 +386,7 @@ function rowHtml(C, r, no) {
     if (slot && v[`${k}_status`] !== "正常") {
       return `<td class="in ro"><div class="seg st-only" data-e="${r.enrollment_id}" data-f="${field}"><button class="link stTag" data-e="${r.enrollment_id}" title="点击修改特殊情况">${esc(v[`${k}_status`])}</button></div></td>`;
     }
-    // 课程成绩标了缓考、缺考、退课、休学：技能和平时两格不再录入，显示状态，点开「更多」
+    // 课程成绩标了缓考、缺考、退课、休学、选课未修：技能和平时两格不再录入，显示状态，点开「更多」
     if (!slot && r.course_status && r.course_status !== "正常") {
       return `<td class="in ro"><div class="seg st-only" data-e="${r.enrollment_id}" data-f="${field}"><button class="link stTag" data-e="${r.enrollment_id}" title="课程成绩${esc(r.course_status)}，点击修改">${esc(r.course_status)}</button></div></td>`;
     }
@@ -732,7 +732,7 @@ async function rowMenu(C, eid, { focusSt = null, onClose = null } = {}) {
   const hist = h.history || [];
   modal(`<h3>${esc(r.student_no)} ${esc(r.name)}</h3>
     <h4>特殊情况</h4><div class="row">${stSel("a")}${stSel("b")}${courseSel}</div>
-    <p class="muted small">体测：免测不计入成绩；缓测记为缺项；课上未测（没来参加课上的测试）、违纪记 0 分。课程成绩选缓考、缺考、退课、休学时总成绩不算，显示状态，运动技能和平时成绩可以不填。${peLock ? "体测成绩已锁定，两项体测状态不能再改。" : ""}</p>
+    <p class="muted small">体测：免测不计入成绩；缓测记为缺项；课上未测（没来参加课上的测试）、违纪记 0 分。课程成绩选缓考、缺考、退课、休学、选课未修时总成绩不算，显示状态，运动技能和平时成绩可以不填。${peLock ? "体测成绩已锁定，两项体测状态不能再改。" : ""}</p>
     <h4>学生信息</h4>${pendingLine}
     <div class="map-grid" style="max-width:none;grid-template-columns:70px 1fr 70px 1fr">
       <div>姓名</div><div><input type="text" id="siName" value="${esc(stu.name || r.name)}" ${ed ? "" : "disabled"}></div>
@@ -834,13 +834,19 @@ function configDialog(C) {
   });
 }
 function uploadDialog(C) {
-  modal(`<h3>整班上传成绩</h3><p class="muted small">先“下载录入模板”，线下填好后上传。系统按学号匹配、逐行校验；空单元格不修改原值。导入后可回退。</p>
+  modal(`<h3>整班上传成绩</h3><p class="muted small">先“下载录入模板”，线下填好后上传。系统按学号匹配、逐行校验；空单元格不修改原值。成绩和系统已有的比较取更好的，想改低请在网页里改；状态列填了就覆盖。导入后可回退。</p>
     <input type="file" id="upFile" accept=".xlsx"><div id="upRes" style="margin-top:12px"></div>`, (el) => {
     $("#upFile", el).onchange = async (e) => {
       const fd = new FormData(); fd.append("file", e.target.files[0]);
       try {
         const r = await api(`/api/classes/${C.id}/upload`, { method: "POST", body: fd });
-        $("#upRes", el).innerHTML = `<p>本班 ${r.roster} 人，可写入 <b>${r.students}</b> 人共 <b>${r.cells}</b> 个单元格，将覆盖这些单元格的现有值。</p>
+        const other = r.skipped.length - r.better_kept;
+        const upTable = r.updates.length ? `<details><summary>将更新的格子（${r.updates.length}）</summary><table class="list" style="margin-top:6px"><thead><tr><th>行</th><th>学号</th><th>姓名</th><th>列</th><th>系统里</th><th>改成</th></tr></thead><tbody>
+          ${r.updates.slice(0, 500).map((x) => `<tr><td>${x.row}</td><td>${esc(x.student_no)}</td><td>${esc(x.name)}</td><td>${esc(x.label)}</td><td>${esc(x.old) || '<span class="muted">空</span>'}</td><td><b>${esc(x.new)}</b></td></tr>`).join("")}</tbody></table></details>` : "";
+        const skTable = r.skipped.length ? `<details><summary>不改的格子（${r.skipped.length}）</summary><table class="list" style="margin-top:6px"><thead><tr><th>行</th><th>学号</th><th>姓名</th><th>列</th><th>表里</th><th>系统里</th><th>原因</th></tr></thead><tbody>
+          ${r.skipped.slice(0, 500).map((x) => `<tr><td>${x.row}</td><td>${esc(x.student_no)}</td><td>${esc(x.name)}</td><td>${esc(x.label)}</td><td>${esc(x.value)}</td><td>${esc(x.current) || '<span class="muted">空</span>'}</td><td>${esc(x.reason)}</td></tr>`).join("")}</tbody></table></details>` : "";
+        $("#upRes", el).innerHTML = `<p>本班 ${r.roster} 人。将更新 <b>${r.cells}</b> 格（${r.students} 人）${r.better_kept ? `，<b>${r.better_kept}</b> 格因系统已有更好成绩不改` : ""}${other ? `，${other} 格因该项标了特殊情况不写入` : ""}。</p>
+          ${upTable}${skTable}
           ${r.errors.length ? `<div class="notice err">${r.errors.length} 个单元格校验不通过，不会写入：<ul>${r.errors.slice(0, 50).map((x) => `<li>第${x.row}行 ${esc(x.student_no)} ${esc(x.name)}：${esc(x.value)} — ${esc(x.error)}</li>`).join("")}</ul></div>` : ""}
           ${r.unknown.length ? `<div class="notice">${r.unknown.length} 行学号不在本班：${esc(r.unknown.slice(0, 20).join("、"))}</div>` : ""}
           <div class="row"><span class="spacer"></span><button class="primary" id="upGo" ${r.cells ? "" : "disabled"}>确认导入</button></div>`;

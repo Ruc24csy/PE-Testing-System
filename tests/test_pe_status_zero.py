@@ -100,7 +100,7 @@ def test_template_upload_reads_old_names(env):
     tpl = openpyxl.load_workbook(io.BytesIO(t.get(f"/api/classes/{cid}/template").content))
     ws = tpl.worksheets[0]
     head = [c.value for c in ws[1]]
-    assert any("课上未测" in str(c.value) for c in tpl["填写说明"]["A"])
+    assert any("课上未测" in str(c.value) for c in ws[2])  # 示例行列出体测状态的写法
     col = {h: i for i, h in enumerate(head)}
     a_st = next(h for h in head if h and h.endswith("状态"))
     for r in ws.iter_rows(min_row=2):

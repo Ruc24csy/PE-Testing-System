@@ -604,13 +604,29 @@ def _xlsx(data: bytes, filename: str) -> Response:
 
 # ---------------------------------------------------------------- 教师整班上传（备用路径）
 
-TEMPLATE_COLS = {"student_no": ["学号"], "a_raw": ["原始成绩"], "a_status": ["状态"],
-                 "skill": ["运动技能评定", "运动技能"], "regular": ["平时成绩", "平时"]}
+UPLOAD_FIELD_LABELS = {"skill": "运动技能评定", "regular": "平时成绩", "course_status": "课程成绩特殊情况"}
+
+
+def _upload_compare(f: str, new, cur, row: dict, cfg: dict) -> str:
+    """表里的成绩 new 和系统已有 cur 比：返回 write（写入）、same（相同不动）、worse（系统已有更好的）。"""
+    if cur is None:
+        return "write"
+    if new == cur:
+        return "same"
+    if f in ("a_raw", "b_raw"):
+        item = next(s for s in cfg["slots"] if s["key"] == f[0])["items"][row["gender_code"]]
+        return "write" if score_import.better(item, new, cur) else "worse"
+    return "write" if new > cur else "worse"  # 运动技能、平时成绩取较高的
 
 
 @app.post("/api/classes/{cid}/upload")
 async def upload_scores(cid: int, file: UploadFile = File(...), u: User = Depends(current_user),
                         db: Session = Depends(get_db)):
+    """预检整班上传。成绩格和系统已有值比较取更好的；状态列填了就覆盖；空格不动。
+
+    模板第 2 行是示例（学号格写“示例”），学生名单下面是填写说明（以“填写说明”开头的一行起），都跳过；
+    老模板没有这两部分，照样能传。
+    """
     c, sem = _class(db, cid, u)
     ok, why = services.can_edit(c, sem)
     if not ok:
@@ -627,6 +643,8 @@ async def upload_scores(cid: int, file: UploadFile = File(...), u: User = Depend
     head = [importer.clean(h) for h in rows[0]]
     cfg = services.class_config(c, sem)
     la, lb = cfg["slots"][0].get("label", "项目一"), cfg["slots"][1].get("label", "项目二")
+    labels = {"a_raw": f"{la}原始成绩", "a_status": f"{la}状态", "b_raw": f"{lb}原始成绩", "b_status": f"{lb}状态",
+              **UPLOAD_FIELD_LABELS}
     colmap = {}
     for i, h in enumerate(head):
         if h == "学号":
@@ -643,18 +661,30 @@ async def upload_scores(cid: int, file: UploadFile = File(...), u: User = Depend
             colmap["skill"] = i
         elif h.startswith("平时"):
             colmap["regular"] = i
+        elif h.startswith("课程成绩"):
+            colmap["course_status"] = i
     if "student_no" not in colmap:
         raise HTTPException(400, "找不到“学号”列，请使用平台下载的模板")
     roster = {r["student_no"]: r for r in services.load_class_rows(db, c, sem)}
-    changes, errors, unknown = [], [], []
+    changes, updates, skipped, errors, unknown = [], [], [], [], []
+
+    def cur_text(f, row):
+        if f in ("a_raw", "b_raw"):
+            return row["display"][f[0]]["raw_text"]
+        v = row["values"].get(f)
+        return "" if v is None else (f"{v:g}" if isinstance(v, float) else str(v))
+
     for n, r in enumerate(rows[1:], start=2):
         sno = importer.clean(r[colmap["student_no"]]) if colmap["student_no"] < len(r) else ""
-        if not sno:
+        if sno.startswith("填写说明"):
+            break  # 名单下面的填写说明
+        if not sno or sno == "示例":
             continue
         row = roster.get(sno)
         if not row:
             unknown.append(f"第{n}行 {sno}")
             continue
+        parsed = {}
         for f, i in colmap.items():
             if f == "student_no" or i >= len(r):
                 continue
@@ -663,19 +693,51 @@ async def upload_scores(cid: int, file: UploadFile = File(...), u: User = Depend
                 continue
             v = importer.clean(v) if not isinstance(v, (int, float)) else v
             try:
-                services.parse_cell(f, v, cfg, row["gender_code"])
+                parsed[f] = (v, services.parse_cell(f, v, cfg, row["gender_code"]))
             except scoring.ParseError as e:
                 errors.append({"row": n, "student_no": sno, "name": row["name"], "field": f, "value": str(v),
                                "error": str(e)})
-                continue
+
+        def add(f, v, new_text):
             changes.append({"enrollment_id": row["enrollment_id"], "field": f, "value": v,
                             "student_no": sno, "name": row["name"]})
+            updates.append({"row": n, "student_no": sno, "name": row["name"], "field": f, "label": labels[f],
+                            "old": cur_text(f, row), "new": new_text})
+
+        def skip(f, v, why):
+            skipped.append({"row": n, "student_no": sno, "name": row["name"], "field": f, "label": labels[f],
+                            "value": str(v), "current": cur_text(f, row), "reason": why})
+
+        # 状态列先写：表里把状态改回“正常”时，同一行的成绩才能接着写入
+        for f in ("a_status", "b_status", "course_status"):
+            if f in parsed:
+                v, val = parsed[f]
+                if val != (row["values"].get(f) or "正常"):
+                    add(f, v, val)
+        for f in ("a_raw", "b_raw", "skill", "regular"):
+            if f not in parsed:
+                continue
+            v, val = parsed[f]
+            if val == row["values"].get(f):
+                continue  # 和系统里一样（模板预填的原值），不算改动
+            if f in ("a_raw", "b_raw"):
+                st_field = f[0] + "_status"
+                st = parsed[st_field][1] if st_field in parsed else (row["values"].get(st_field) or "正常")
+                if st != "正常":
+                    skip(f, v, f"该项状态是“{st}”，成绩不写入")
+                    continue
+            how = _upload_compare(f, val, row["values"].get(f), row, cfg)
+            if how == "write":
+                add(f, v, str(v) if f in ("a_raw", "b_raw") else f"{val:g}")
+            elif how == "worse":
+                skip(f, v, "系统已有更好成绩")
     token = uuid.uuid4().hex
     (importer.UPLOAD_DIR / f"scores-{token}.json").write_text(
         __import__("json").dumps({"class_id": c.id, "changes": changes}, ensure_ascii=False))
     touched = len({ch["enrollment_id"] for ch in changes})
-    return {"token": token, "cells": len(changes), "students": touched, "errors": errors, "unknown": unknown,
-            "roster": len(roster)}
+    return {"token": token, "cells": len(changes), "students": touched, "updates": updates, "skipped": skipped,
+            "better_kept": sum(1 for x in skipped if x["reason"] == "系统已有更好成绩"),
+            "errors": errors, "unknown": unknown, "roster": len(roster)}
 
 
 @app.post("/api/classes/{cid}/upload/commit")

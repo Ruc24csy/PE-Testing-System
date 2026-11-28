@@ -450,11 +450,16 @@ def test_class_template_sorted_by_student_no(admin, teacher):
 
     wb = openpyxl.load_workbook(io.BytesIO(teacher.get(f"/api/classes/{cid}/template").content))
     ws = wb.active
-    got = [row[0].value for row in ws.iter_rows(min_row=2)]
+    assert ws.cell(row=2, column=1).value == "示例"  # 第2行是示例
+    got = []
+    for row in ws.iter_rows(min_row=3):
+        if row[0].value is None:  # 名单下面空一行是填写说明
+            break
+        got.append(row[0].value)
     assert got == ["2028200001", "2028200002", "2028200009", "2028200011", "2028200100"]
     # 学号列仍是文本，姓名、表头不变
     assert [c.value for c in ws[1]][:3] == ["学号", "姓名", "性别"]
-    assert isinstance(ws.cell(row=2, column=1).value, str)
+    assert isinstance(ws.cell(row=3, column=1).value, str)
     # 网页录入表和导出仍按同一学号顺序
     web = [r["student_no"] for r in teacher.get(f"/api/classes/{cid}").json()["rows"]]
     assert sorted(web, key=lambda s: int(s)) == got
