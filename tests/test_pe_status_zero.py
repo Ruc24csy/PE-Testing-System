@@ -102,7 +102,7 @@ def test_template_upload_reads_old_names(env):
     head = [c.value for c in ws[1]]
     assert any("课上未测" in str(c.value) for c in ws[2])  # 示例行列出体测状态的写法
     col = {h: i for i, h in enumerate(head)}
-    a_st = next(h for h in head if h and h.endswith("状态"))
+    a_st = head[3]  # 体测特殊情况直接写在成绩格里
     for r in ws.iter_rows(min_row=2):
         no = r[col["学号"]].value
         if no == NOS[2]:
@@ -112,7 +112,7 @@ def test_template_upload_reads_old_names(env):
     buf = io.BytesIO()
     tpl.save(buf)
     up = t.post(f"/api/classes/{cid}/upload", files={"file": ("t.xlsx", buf.getvalue())}).json()
-    assert up["errors"] == [] and up["cells"] >= 2
+    assert up["errors"] == [] and len(up["fills"]) + len(up["conflicts"]) >= 2
     assert t.post(f"/api/classes/{cid}/upload/commit", json={"token": up["token"]}).status_code == 200
     rows = rows_of(t, cid)
     assert rows[NOS[2]]["values"]["a_status"] == "课上未测" and rows[NOS[3]]["values"]["a_status"] == "违纪"

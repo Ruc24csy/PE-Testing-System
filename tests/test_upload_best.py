@@ -1,4 +1,4 @@
-"""教师整班上传取最优、课程成绩「选课未修」、录入模板的示例行和底部填写说明。"""
+"""教师整班上传：平台里空着的直接写、不一致的让老师逐格选；课程成绩「选课未修」；录入模板版式（状态并入成绩格、示例行、底部说明）。"""
 import io
 
 import openpyxl
@@ -21,6 +21,7 @@ ENROLL = [["学年学期", "学号", "姓名", "上课班级", "上课专业", "
            "课程名称", "课程类别", "上课校区"]] + [
     ["2041-2042-1", no, f"学生{i}", "2041法学1班", "法学", "2041", "法学院", "Y001", "篮球1班", "吴老师", "篮球", "公共体育",
      "中关村校区"] for i, no in enumerate(NOS, 1)]
+A, B, SK, RG = 3, 4, 5, 6  # 新模板列：学号 姓名 性别 项目一 项目二 运动技能评定 平时成绩
 
 
 @pytest.fixture(scope="module")
@@ -52,18 +53,21 @@ def set_cells(t, cid, cells):
     assert all(x["ok"] for x in res["results"]), res
 
 
+def reset(t, cid):
+    set_cells(t, cid, [(no, f, "正常") for no in NOS for f in ("a_status", "b_status", "course_status")]
+              + [(no, f, "") for no in NOS for f in ("a_raw", "b_raw", "skill", "regular")])
+
+
 def template(t, cid):
     wb = openpyxl.load_workbook(io.BytesIO(t.get(f"/api/classes/{cid}/template").content))
-    ws = wb.worksheets[0]
-    col = {h: i for i, h in enumerate(c.value for c in ws[1])}
-    return wb, ws, col
+    return wb, wb.worksheets[0]
 
 
-def fill(ws, col, edits):
-    """edits: {学号: {表头: 值}}"""
+def fill(ws, edits):
+    """edits: {学号: {列号: 值}}"""
     for r in ws.iter_rows(min_row=2):
-        for h, v in edits.get(r[0].value, {}).items():
-            r[col[h]].value = v
+        for i, v in edits.get(r[0].value, {}).items():
+            r[i].value = v
 
 
 def upload(t, cid, wb):
@@ -74,106 +78,132 @@ def upload(t, cid, wb):
     return r.json()
 
 
-def commit(t, cid, up):
-    r = t.post(f"/api/classes/{cid}/upload/commit", json={"token": up["token"]})
+def commit(t, cid, up, use_table=None):
+    body = {"token": up["token"]}
+    if use_table is not None:
+        body["use_table"] = use_table
+    r = t.post(f"/api/classes/{cid}/upload/commit", json=body)
     assert r.status_code == 200, r.text
     return r.json()
 
 
-def test_template_layout_example_and_notes(env):
+def key(xs):
+    return {(x["student_no"], x["label"]): x for x in xs}
+
+
+def test_template_layout(env):
     t, cid = env["teacher"], env["cid"]
-    wb, ws, col = template(t, cid)
-    assert "填写说明" not in wb.sheetnames  # 说明挪到录入表最下面，不再单独一页
+    reset(t, cid)
+    set_cells(t, cid, [(NOS[0], "a_status", "免测"), (NOS[0], "b_raw", "230"),
+                       (NOS[1], "course_status", "选课未修"), (NOS[2], "skill", "50")])
+    wb, ws = template(t, cid)
+    assert "填写说明" not in wb.sheetnames  # 说明挪到录入表最下面
     head = [c.value for c in ws[1]]
-    assert head[0] == "学号" and head[-1] == "课程成绩特殊情况"
+    assert head[:3] == ["学号", "姓名", "性别"] and head[SK:] == ["运动技能评定", "平时成绩"] and len(head) == 7
+    assert not any("状态" in h or h.startswith("课程成绩") for h in head)  # 状态并入成绩列
     ex = [c.value for c in ws[2]]
     assert ex[0] == "示例" and ws.cell(row=2, column=1).fill.fgColor.rgb.endswith("FFF2CC")
-    assert "3'40\"" in ex[col["耐力跑原始成绩"]] if "耐力跑原始成绩" in col else True
-    assert "选课未修" in ex[col["课程成绩特殊情况"]] and "课上未测" in ex[4]
-    nos = [ws.cell(row=i, column=1).value for i in range(3, 3 + len(NOS))]
-    assert nos == NOS
-    assert ws.cell(row=3 + len(NOS), column=1).value is None  # 名单下面空一行
+    assert "3'40\"" in ex[A] and "免测" in ex[A] and "选课未修" in ex[SK]
+    body = {r[0].value: [c.value for c in r] for r in ws.iter_rows(min_row=3, max_row=2 + len(NOS))}
+    assert list(body) == NOS
+    assert body[NOS[0]][A] == "免测" and body[NOS[0]][B] == "230"          # 和平台显示一致
+    assert body[NOS[1]][SK] == body[NOS[1]][RG] == "选课未修" and body[NOS[2]][SK] == 50
+    assert ws.cell(row=3 + len(NOS), column=1).value is None
     notes = [ws.cell(row=i, column=1).value for i in range(4 + len(NOS), ws.max_row + 1)]
-    assert notes[0].startswith("填写说明") and any("取用时短" in n for n in notes)
-    assert not any("3'40" in n for n in notes)  # 示例里写过的写法不再重复
-    # 原样上传：示例行和说明都被跳过，没有要改的、没有报错、没有“学号不在本班”
+    assert notes[0].startswith("填写说明") and not any("3'40" in n or "免测" in n for n in notes)
+    # 原样上传：示例行、说明跳过；和平台一样的格子不显示
     up = upload(t, cid, wb)
-    assert up["cells"] == 0 and up["errors"] == [] and up["unknown"] == [] and up["skipped"] == []
+    assert up["fills"] == [] and up["conflicts"] == [] and up["errors"] == [] and up["unknown"] == []
 
 
-def test_upload_keeps_better_scores(env):
+def test_upload_fills_empty_and_asks_on_differences(env):
     t, cid = env["teacher"], env["cid"]
+    reset(t, cid)
     s1, s2 = NOS[0], NOS[1]
     set_cells(t, cid, [(s1, "a_raw", "3:50"), (s1, "b_raw", "230"), (s1, "skill", "50"), (s1, "regular", "8")])
-    wb, ws, col = template(t, cid)
-    la = next(h for h in col if h.endswith("原始成绩"))
-    lb = [h for h in col if h.endswith("原始成绩")][1]
-    fill(ws, col, {s1: {la: "3'40\"", lb: 220, "运动技能评定": 45, "平时成绩": 9},
-                   s2: {la: "4:00", "运动技能评定": 40}})
+    wb, ws = template(t, cid)
+    fill(ws, {s1: {A: "3'40\"", B: 220, SK: 50, RG: 9},   # 技能一样不显示
+              s2: {A: "4:00", SK: 40}})                    # 平台里空着：直接写
     up = upload(t, cid, wb)
     assert up["errors"] == []
-    got = {(x["student_no"], x["field"]): x for x in up["updates"]}
-    # 跑步用时短的更好；系统里没有的直接写
-    assert set(got) == {(s1, "a_raw"), (s1, "regular"), (s2, "a_raw"), (s2, "skill")}
-    assert got[(s1, "a_raw")]["old"] == "3'50\""
-    sk = {(x["student_no"], x["field"]): x for x in up["skipped"]}
-    assert set(sk) == {(s1, "b_raw"), (s1, "skill")}  # 跳远取大的、技能取高的
-    assert all(x["reason"] == "系统已有更好成绩" for x in sk.values()) and up["better_kept"] == 2
-    assert up["cells"] == 4 and up["students"] == 2
-    cm = commit(t, cid, up)
-    rows = rows_of(t, cid)
-    v1, v2 = rows[s1]["values"], rows[s2]["values"]
-    assert v1["a_raw"] == 220 and v1["b_raw"] == 230 and v1["skill"] == 50 and v1["regular"] == 9
+    assert set(key(up["fills"])) == {(s2, "耐力跑"), (s2, "运动技能评定")}
+    cf = key(up["conflicts"])
+    assert set(cf) == {(s1, "耐力跑"), (s1, "立定跳远"), (s1, "平时成绩")}
+    assert cf[(s1, "耐力跑")]["sys"] == "3'50\"" and cf[(s1, "耐力跑")]["default"] == "table"   # 表里跑得快
+    assert cf[(s1, "立定跳远")]["default"] == "system"                                        # 平台跳得远
+    # 老师选：耐力跑用表里的，跳远、平时保留平台的
+    res = commit(t, cid, up, use_table=[cf[(s1, "耐力跑")]["id"]])
+    assert res["saved"] == 3 and res["kept"] == 2 and res["failed"] == []
+    v1, v2 = rows_of(t, cid)[s1]["values"], rows_of(t, cid)[s2]["values"]
+    assert v1["a_raw"] == 220 and v1["b_raw"] == 230 and v1["regular"] == 8
     assert v2["a_raw"] == 240 and v2["skill"] == 40
-    # 整批回退照旧
-    assert t.post(f"/api/classes/{cid}/upload/{cm['batch']}/revert").status_code == 200
-    assert rows_of(t, cid)[s1]["values"]["a_raw"] == 230
+    assert t.post(f"/api/classes/{cid}/upload/{res['batch']}/revert").status_code == 200
+    assert rows_of(t, cid)[s1]["values"]["a_raw"] == 230 and rows_of(t, cid)[s2]["values"]["a_raw"] is None
 
 
-def test_upload_lower_jump_and_pull_direction(env):
-    """跳远：表里更远才写；跑步：表里更慢不写。"""
+def test_upload_default_choice_when_not_given(env):
+    """不传选择时按预检的默认：表里更好的用表里的，平台更好的保留平台的。"""
     t, cid = env["teacher"], env["cid"]
+    reset(t, cid)
     s = NOS[4]
     set_cells(t, cid, [(s, "a_raw", "3:30"), (s, "b_raw", "200")])
-    wb, ws, col = template(t, cid)
-    la, lb = [h for h in col if h.endswith("原始成绩")]
-    fill(ws, col, {s: {la: "3:45", lb: 245}})
+    wb, ws = template(t, cid)
+    fill(ws, {s: {A: "3:45", B: 245}})
     up = upload(t, cid, wb)
-    assert [(x["field"], x["new"]) for x in up["updates"]] == [("b_raw", "245")]
-    assert [(x["field"], x["current"]) for x in up["skipped"]] == [("a_raw", "3'30\"")]
+    cf = key(up["conflicts"])
+    assert cf[(s, "耐力跑")]["default"] == "system" and cf[(s, "立定跳远")]["default"] == "table"
+    commit(t, cid, up)
+    v = rows_of(t, cid)[s]["values"]
+    assert v["a_raw"] == 210 and v["b_raw"] == 245
 
 
-def test_upload_status_columns_override(env):
+def test_upload_status_in_score_cells(env):
     t, cid = env["teacher"], env["cid"]
-    s3, s4, s1 = NOS[2], NOS[3], NOS[0]
-    set_cells(t, cid, [(s3, "a_status", "免测"), (s4, "a_status", "免测"), (s1, "b_raw", "230")])
-    wb, ws, col = template(t, cid)
-    la, lb = [h for h in col if h.endswith("原始成绩")]
-    sa, sb = [h for h in col if h.endswith("状态")]
-    fill(ws, col, {
-        s3: {la: "3:30"},                       # 系统里免测、表里状态格还是免测：成绩不写
-        s4: {sa: "正常", la: "3:35"},            # 表里把状态改回正常：状态和成绩都写
-        s1: {sb: "缓测", "课程成绩特殊情况": "选课未修"},  # 状态列填了就覆盖，即使系统里有成绩
-    })
+    reset(t, cid)
+    s1, s2, s3 = NOS[0], NOS[1], NOS[2]
+    set_cells(t, cid, [(s1, "a_status", "免测"), (s2, "b_raw", "230"), (s3, "skill", "50"), (s3, "regular", "8")])
+    wb, ws = template(t, cid)
+    fill(ws, {s1: {A: "3:35"},                      # 平台免测、表里写成绩
+              s2: {B: "缓测", SK: "选课未修"},       # 平台有成绩、表里写特殊情况；课程成绩平台里空着
+              s3: {SK: "退课", RG: "退课"}})          # 平台有技能平时、表里写课程成绩特殊情况
     up = upload(t, cid, wb)
     assert up["errors"] == []
-    sk = {(x["student_no"], x["field"]): x["reason"] for x in up["skipped"]}
-    assert sk == {(s3, "a_raw"): "该项状态是“免测”，成绩不写入"}
-    fields = [(x["student_no"], x["field"]) for x in up["updates"]]
-    assert fields.index((s4, "a_status")) < fields.index((s4, "a_raw"))
-    assert (s1, "b_status") in fields and (s1, "course_status") in fields
-    commit(t, cid, up)
+    cf = key(up["conflicts"])
+    assert set(cf) == {(s1, "耐力跑"), (s2, "立定跳远")}
+    assert cf[(s1, "耐力跑")]["sys"] == "免测" and cf[(s1, "耐力跑")]["new"] == "3:35"
+    assert cf[(s2, "立定跳远")]["sys"] == "230" and cf[(s2, "立定跳远")]["new"] == "缓测"
+    fl = key(up["fills"])
+    assert fl[(s2, "课程成绩")]["new"] == "选课未修" and fl[(s3, "课程成绩")]["new"] == "退课"
+    commit(t, cid, up, use_table=[x["id"] for x in up["conflicts"]])
     rows = rows_of(t, cid)
-    assert rows[s3]["values"]["a_status"] == "免测" and rows[s3]["values"]["a_raw"] is None
-    assert rows[s4]["values"]["a_status"] == "正常" and rows[s4]["values"]["a_raw"] == 215
-    assert rows[s1]["values"]["b_status"] == "缓测" and rows[s1]["values"]["b_raw"] is None
-    assert rows[s1]["course_status"] == "选课未修"
-    set_cells(t, cid, [(s1, "course_status", "正常"), (s1, "b_status", "正常"), (s3, "a_status", "正常")])
+    assert rows[s1]["values"]["a_status"] == "正常" and rows[s1]["values"]["a_raw"] == 215
+    assert rows[s2]["values"]["b_status"] == "缓测" and rows[s2]["values"]["b_raw"] is None
+    assert rows[s2]["course_status"] == "选课未修" and rows[s3]["course_status"] == "退课"
+    # 平台里是选课未修、表里技能写了分数：要老师选，选表里的就改回正常
+    wb, ws = template(t, cid)
+    fill(ws, {s2: {SK: 45, RG: None}})
+    up = upload(t, cid, wb)
+    cf = key(up["conflicts"])
+    assert cf[(s2, "运动技能评定")]["sys"] == "选课未修"
+    commit(t, cid, up, use_table=[cf[(s2, "运动技能评定")]["id"]])
+    r = rows_of(t, cid)[s2]
+    assert r["course_status"] == "正常" and r["values"]["skill"] == 45
+
+
+def test_upload_course_status_mixed_is_error(env):
+    t, cid = env["teacher"], env["cid"]
+    reset(t, cid)
+    wb, ws = template(t, cid)
+    fill(ws, {NOS[0]: {SK: "选课未修", RG: 9}, NOS[1]: {SK: "退课", RG: "休学"}})
+    up = upload(t, cid, wb)
+    assert {e["student_no"] for e in up["errors"]} == {NOS[0], NOS[1]}
+    assert up["fills"] == [] and up["conflicts"] == []
 
 
 def test_course_status_not_taken(env):
     """选课未修：和退课、休学一样总成绩不算、显示状态，技能平时可不填，导出总成绩格写状态。"""
     t, cid = env["teacher"], env["cid"]
+    reset(t, cid)
     assert "选课未修" in t.get(f"/api/classes/{cid}").json()["course_statuses"]
     s = NOS[1]
     set_cells(t, cid, [(s, "a_raw", "3:50"), (s, "b_raw", "230"), (s, "course_status", "选课未修")])
@@ -182,28 +212,24 @@ def test_course_status_not_taken(env):
     wb = openpyxl.load_workbook(io.BytesIO(t.get(f"/api/classes/{cid}/export?sort=no").content))
     body = [[c.value for c in r] for r in wb["成绩"].iter_rows(min_row=3)]
     assert next(b for b in body if b[1] == s)[4] == "选课未修"
-    # 模板里预填，示例行列出这个写法
-    _, ws, col = template(t, cid)
-    r = next(r for r in ws.iter_rows(min_row=3) if r[0].value == s)
-    assert r[col["课程成绩特殊情况"]].value == "选课未修"
-    set_cells(t, cid, [(s, "course_status", "正常")])
 
 
 def test_old_template_still_uploads(env):
-    """老版式：第1行表头、第2行起就是学生，没有示例行和课程成绩列，填写说明在另一页。"""
+    """老版式：第1行表头、第2行起就是学生，体测状态单独成列，填写说明在另一页。"""
     t, cid = env["teacher"], env["cid"]
-    _, ws, col = template(t, cid)
-    la, lb = [h for h in col if h.endswith("原始成绩")]
-    sa, sb = [h for h in col if h.endswith("状态")]
-    s = NOS[3]
+    reset(t, cid)
     old = openpyxl.Workbook()
     o = old.active
-    o.append(["学号", "姓名", "性别", la, sa, lb, sb, "运动技能评定", "平时成绩"])
+    o.append(["学号", "姓名", "性别", "耐力跑原始成绩", "耐力跑状态", "立定跳远原始成绩", "立定跳远状态", "运动技能评定", "平时成绩"])
     for no in NOS:
-        o.append([no, "x", "男", None, None, None, None, 55 if no == s else None, None])
+        o.append([no, "x", "男", None, "缺考" if no == NOS[0] else None, 231 if no == NOS[1] else None,
+                  None, 55 if no == NOS[1] else None, None])
     old.create_sheet("填写说明").append(["按学号匹配，请勿修改学号列。"])
     up = upload(t, cid, old)
-    assert up["errors"] == [] and up["unknown"] == []
-    assert [(x["student_no"], x["field"]) for x in up["updates"]] == [(s, "skill")]
+    assert up["errors"] == [] and up["unknown"] == [] and up["conflicts"] == []
+    assert set(key(up["fills"])) == {(NOS[1], "立定跳远"), (NOS[1], "运动技能评定")} | (
+        {(NOS[0], "耐力跑")})
     commit(t, cid, up)
-    assert rows_of(t, cid)[s]["values"]["skill"] == 55
+    rows = rows_of(t, cid)
+    assert rows[NOS[0]]["values"]["a_status"] == "课上未测"
+    assert rows[NOS[1]]["values"]["b_raw"] == 231 and rows[NOS[1]]["values"]["skill"] == 55

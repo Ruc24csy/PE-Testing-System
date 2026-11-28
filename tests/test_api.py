@@ -247,12 +247,12 @@ def test_full_flow(admin, teacher):
     ws = wb.active
     for row in ws.iter_rows(min_row=2):
         if row[0].value == "2025200002":
-            row[7].value = 48
-            row[8].value = "8.5"
+            row[5].value = 48     # 运动技能评定
+            row[6].value = "8.5"  # 平时成绩
     buf = io.BytesIO()
     wb.save(buf)
     up = teacher.post(f"/api/classes/{cid}/upload", files={"file": ("t.xlsx", buf.getvalue())}).json()
-    assert up["students"] >= 1 and not up["errors"]
+    assert up["students"] >= 1 and not up["errors"] and up["fills"]
     cm = teacher.post(f"/api/classes/{cid}/upload/commit", json={"token": up["token"]}).json()
     d = teacher.get(f"/api/classes/{cid}").json()
     assert next(x for x in d["rows"] if x["enrollment_id"] == e2)["values"]["skill"] == 48

@@ -122,21 +122,24 @@ TEMPLATE_EXAMPLE_FILL = PatternFill("solid", fgColor="FFF2CC")
 
 
 def build_template(sem: Semester, c: TeachingClass, rows: list[dict], cfg) -> bytes:
-    """录入模板：第1行表头，第2行示例（上传时跳过），然后是学生，名单下面是填写说明（上传时跳过）。"""
+    """录入模板：第1行表头，第2行示例（上传时跳过），然后是学生，名单下面是填写说明（上传时跳过）。
+
+    格子和平台录入表一致：体测特殊情况写在该项成绩格里，课程成绩特殊情况写在运动技能、平时成绩两格里。
+    """
     wb = Workbook()
     ws = wb.active
     ws.title = "成绩录入"
     sa, sb = cfg["slots"][0], cfg["slots"][1]
     a, b = sa.get("label", "项目一"), sb.get("label", "项目二")
-    heads = ["学号", "姓名", "性别", f"{a}原始成绩", f"{a}状态", f"{b}原始成绩", f"{b}状态", "运动技能评定", "平时成绩",
-             "课程成绩特殊情况"]
+    heads = ["学号", "姓名", "性别", a, b, "运动技能评定", "平时成绩"]
     ws.append(heads)
     for cell in ws[1]:
         cell.font = Font(bold=True)
-    pe_status = "留空即正常；可填" + "／".join(s for s in scoring.STATUSES if s != "正常")
-    ws.append(["示例", "（这一行不用删）", "男", _example_raw(sa), pe_status, _example_raw(sb), pe_status,
-               _example_score(cfg.get("skill_weight", 0.6)), _example_score(cfg.get("regular_weight", 0.1)),
-               "留空即正常；可填" + "／".join(s for s in scoring.COURSE_STATUSES if s != "正常")])
+    pe_st = "特殊情况写" + "／".join(s for s in scoring.STATUSES if s != "正常")
+    course_st = "课程成绩特殊情况写" + "／".join(s for s in scoring.COURSE_STATUSES if s != "正常")
+    ws.append(["示例", "（这一行不用删）", "男", f"{_example_raw(sa)}；{pe_st}", f"{_example_raw(sb)}；{pe_st}",
+               f"{_example_score(cfg.get('skill_weight', 0.6))}；{course_st}",
+               f"{_example_score(cfg.get('regular_weight', 0.1))}；特殊情况同左"])
     for cell in ws[2]:
         cell.fill = TEMPLATE_EXAMPLE_FILL
         cell.font = Font(italic=True, color="7F6000")
@@ -144,13 +147,13 @@ def build_template(sem: Semester, c: TeachingClass, rows: list[dict], cfg) -> by
     for r in rows:
         v = r["values"]
         course = v.get("course_status") or "正常"
-        ws.append([r["student_no"], r["name"], r["gender"], r["display"]["a"]["raw_text"] or None,
-                   None if v["a_status"] == "正常" else v["a_status"], r["display"]["b"]["raw_text"] or None,
-                   None if v["b_status"] == "正常" else v["b_status"], v["skill"], v["regular"],
-                   None if course == "正常" else course])
+        pe = [v[f"{k}_status"] if (v[f"{k}_status"] or "正常") != "正常" else (r["display"][k]["raw_text"] or None)
+              for k in ("a", "b")]
+        sk = [course, course] if course != "正常" else [v["skill"], v["regular"]]
+        ws.append([r["student_no"], r["name"], r["gender"], *pe, *sk])
     last = ws.max_row
-    for i in range(1, len(heads) + 1):
-        ws.column_dimensions[get_column_letter(i)].width = 18
+    for i, w in enumerate([14, 12, 6, 26, 26, 26, 22], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
     for row in ws.iter_rows(min_row=3, max_row=last, max_col=1):
         for cell in row:
             cell.number_format = "@"
@@ -159,10 +162,8 @@ def build_template(sem: Semester, c: TeachingClass, rows: list[dict], cfg) -> by
     ws.append([])
     notes = [f"填写说明（{sem.name} {c.class_name} {c.class_no}）",
              "按学号匹配，请勿修改学号列。第2行示例和这几行说明上传时会跳过，不用删。",
-             "空格表示不修改。成绩格和系统里已有的成绩比较，表里的更好才写入（跑步取用时短的，其余取大的）；"
-             "要把成绩改低，请在网页里改。",
-             "状态列填了就以表里为准。体测项状态不是正常时，表里该项成绩不写入；要录成绩，状态格填“正常”。",
-             "课程成绩填了特殊情况的，总成绩不算，运动技能和平时成绩可以不填。"]
+             "空格表示不修改。平台里空着的格子直接写入；平台里已有、和表里不一样的，上传时会列出来，逐格选用哪个。",
+             "课程成绩填了特殊情况的，总成绩不算，运动技能和平时成绩不用填分数。"]
     for k, line in enumerate(notes):
         ws.append([line])
         ws.cell(row=ws.max_row, column=1).font = Font(bold=k == 0, color="595959")
