@@ -247,12 +247,12 @@ def test_full_flow(admin, teacher):
     ws = wb.active
     for row in ws.iter_rows(min_row=2):
         if row[0].value == "2025200002":
-            row[7].value = 48
-            row[8].value = "8.5"
+            row[5].value = 48     # 运动技能评定
+            row[6].value = "8.5"  # 平时成绩
     buf = io.BytesIO()
     wb.save(buf)
     up = teacher.post(f"/api/classes/{cid}/upload", files={"file": ("t.xlsx", buf.getvalue())}).json()
-    assert up["students"] >= 1 and not up["errors"]
+    assert up["students"] >= 1 and not up["errors"] and up["fills"]
     cm = teacher.post(f"/api/classes/{cid}/upload/commit", json={"token": up["token"]}).json()
     d = teacher.get(f"/api/classes/{cid}").json()
     assert next(x for x in d["rows"] if x["enrollment_id"] == e2)["values"]["skill"] == 48
@@ -450,11 +450,16 @@ def test_class_template_sorted_by_student_no(admin, teacher):
 
     wb = openpyxl.load_workbook(io.BytesIO(teacher.get(f"/api/classes/{cid}/template").content))
     ws = wb.active
-    got = [row[0].value for row in ws.iter_rows(min_row=2)]
+    assert ws.cell(row=2, column=1).value == "示例"  # 第2行是示例
+    got = []
+    for row in ws.iter_rows(min_row=3):
+        if row[0].value is None:  # 名单下面空一行是填写说明
+            break
+        got.append(row[0].value)
     assert got == ["2028200001", "2028200002", "2028200009", "2028200011", "2028200100"]
     # 学号列仍是文本，姓名、表头不变
     assert [c.value for c in ws[1]][:3] == ["学号", "姓名", "性别"]
-    assert isinstance(ws.cell(row=2, column=1).value, str)
+    assert isinstance(ws.cell(row=3, column=1).value, str)
     # 网页录入表和导出仍按同一学号顺序
     web = [r["student_no"] for r in teacher.get(f"/api/classes/{cid}").json()["rows"]]
     assert sorted(web, key=lambda s: int(s)) == got

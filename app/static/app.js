@@ -316,7 +316,7 @@ function renderClass(C) {
       ${d.editable && c.status !== "已提交" ? `<button class="primary" id="submitBtn" title="提交后两项体测成绩锁定；运动技能、平时成绩仍可修改">提交体测成绩</button>` : ""}
       ${d.editable && c.status === "已提交" && !d.sem_locked ? `<button id="withdrawBtn" title="直接撤回，不用体育部审核">撤回提交</button>` : ""}
     </div>
-    <div class="muted small">填完一格按回车，先到右边一格，一行填完再到下一位学生；↑↓ 上下换格。耐力跑填完“分”会自动跳到“秒”。修改会自动保存。只有体测需要提交，体测录完后点“提交体测成绩”。体测填 0 时会问一句学生是不是没来测，要标特殊情况就点框里的“标记特殊情况”。免测、课上未测、缓考、退课、休学等特殊情况和学生信息修改点每行的“更多”。</div>
+    <div class="muted small">填完一格按回车，先到右边一格，一行填完再到下一位学生；↑↓ 上下换格。耐力跑填完“分”会自动跳到“秒”。修改会自动保存。只有体测需要提交，体测录完后点“提交体测成绩”。体测填 0 时会问一句学生是不是没来测，要标特殊情况就点框里的“标记特殊情况”。免测、课上未测、缓考、退课、休学、选课未修等特殊情况和学生信息修改点每行的“更多”。</div>
   </div>
   <div class="grid-wrap"><table class="grid" id="grid">
     <thead><tr>
@@ -386,7 +386,7 @@ function rowHtml(C, r, no) {
     if (slot && v[`${k}_status`] !== "正常") {
       return `<td class="in ro"><div class="seg st-only" data-e="${r.enrollment_id}" data-f="${field}"><button class="link stTag" data-e="${r.enrollment_id}" title="点击修改特殊情况">${esc(v[`${k}_status`])}</button></div></td>`;
     }
-    // 课程成绩标了缓考、缺考、退课、休学：技能和平时两格不再录入，显示状态，点开「更多」
+    // 课程成绩标了缓考、缺考、退课、休学、选课未修：技能和平时两格不再录入，显示状态，点开「更多」
     if (!slot && r.course_status && r.course_status !== "正常") {
       return `<td class="in ro"><div class="seg st-only" data-e="${r.enrollment_id}" data-f="${field}"><button class="link stTag" data-e="${r.enrollment_id}" title="课程成绩${esc(r.course_status)}，点击修改">${esc(r.course_status)}</button></div></td>`;
     }
@@ -732,7 +732,7 @@ async function rowMenu(C, eid, { focusSt = null, onClose = null } = {}) {
   const hist = h.history || [];
   modal(`<h3>${esc(r.student_no)} ${esc(r.name)}</h3>
     <h4>特殊情况</h4><div class="row">${stSel("a")}${stSel("b")}${courseSel}</div>
-    <p class="muted small">体测：免测不计入成绩；缓测记为缺项；课上未测（没来参加课上的测试）、违纪记 0 分。课程成绩选缓考、缺考、退课、休学时总成绩不算，显示状态，运动技能和平时成绩可以不填。${peLock ? "体测成绩已锁定，两项体测状态不能再改。" : ""}</p>
+    <p class="muted small">体测：免测不计入成绩；缓测记为缺项；课上未测（没来参加课上的测试）、违纪记 0 分。课程成绩选缓考、缺考、退课、休学、选课未修时总成绩不算，显示状态，运动技能和平时成绩可以不填。${peLock ? "体测成绩已锁定，两项体测状态不能再改。" : ""}</p>
     <h4>学生信息</h4>${pendingLine}
     <div class="map-grid" style="max-width:none;grid-template-columns:70px 1fr 70px 1fr">
       <div>姓名</div><div><input type="text" id="siName" value="${esc(stu.name || r.name)}" ${ed ? "" : "disabled"}></div>
@@ -834,20 +834,36 @@ function configDialog(C) {
   });
 }
 function uploadDialog(C) {
-  modal(`<h3>整班上传成绩</h3><p class="muted small">先“下载录入模板”，线下填好后上传。系统按学号匹配、逐行校验；空单元格不修改原值。导入后可回退。</p>
+  modal(`<h3>整班上传成绩</h3><p class="muted small">先“下载录入模板”，线下填好后上传。系统按学号匹配、逐行校验；空格不修改。平台里空着的直接写入；平台里已有、和表里不一样的会列出来，由你逐格选用哪个。导入后可回退。</p>
     <input type="file" id="upFile" accept=".xlsx"><div id="upRes" style="margin-top:12px"></div>`, (el) => {
     $("#upFile", el).onchange = async (e) => {
       const fd = new FormData(); fd.append("file", e.target.files[0]);
       try {
         const r = await api(`/api/classes/${C.id}/upload`, { method: "POST", body: fd });
-        $("#upRes", el).innerHTML = `<p>本班 ${r.roster} 人，可写入 <b>${r.students}</b> 人共 <b>${r.cells}</b> 个单元格，将覆盖这些单元格的现有值。</p>
-          ${r.errors.length ? `<div class="notice err">${r.errors.length} 个单元格校验不通过，不会写入：<ul>${r.errors.slice(0, 50).map((x) => `<li>第${x.row}行 ${esc(x.student_no)} ${esc(x.name)}：${esc(x.value)} — ${esc(x.error)}</li>`).join("")}</ul></div>` : ""}
+        const cf = r.conflicts, fl = r.fills;
+        const who = (x) => `第${x.row}行 ${esc(x.student_no)} ${esc(x.name)}`;
+        const cfTable = cf.length ? `<div class="notice" style="margin-top:8px"><b>${cf.length}</b> 格平台里已有成绩，和表里不一样，请选用哪个：
+          <div class="row" style="margin:6px 0"><button id="upAllT">全部用表里的</button><button id="upAllS">全部保留平台的</button></div>
+          <table class="list"><thead><tr><th>学生</th><th>列</th><th>保留平台的</th><th>用表里的</th></tr></thead><tbody>
+          ${cf.map((x) => `<tr><td>${who(x)}</td><td>${esc(x.label)}</td>
+            <td><label><input type="radio" name="upc${x.id}" value="system" ${x.default === "system" ? "checked" : ""}> ${esc(x.sys)}</label></td>
+            <td><label><input type="radio" name="upc${x.id}" value="table" ${x.default === "table" ? "checked" : ""}> <b>${esc(x.new)}</b></label></td></tr>`).join("")}</tbody></table></div>` : "";
+        const flTable = fl.length ? `<details><summary>平台里空着、直接写入的格子（${fl.length}）</summary><table class="list" style="margin-top:6px"><thead><tr><th>学生</th><th>列</th><th>写入</th></tr></thead><tbody>
+          ${fl.slice(0, 500).map((x) => `<tr><td>${who(x)}</td><td>${esc(x.label)}</td><td>${esc(x.new)}</td></tr>`).join("")}</tbody></table></details>` : "";
+        $("#upRes", el).innerHTML = `<p>本班 ${r.roster} 人。直接写入 <b>${fl.length}</b> 格${cf.length ? `，<b>${cf.length}</b> 格和平台不一样，要你选` : ""}；和平台一样的格子不显示。</p>
+          ${flTable}${cfTable}
+          ${r.errors.length ? `<div class="notice err">${r.errors.length} 个单元格校验不通过，不会写入：<ul>${r.errors.slice(0, 50).map((x) => `<li>${who(x)} ${esc(x.field)}：${esc(x.value)} — ${esc(x.error)}</li>`).join("")}</ul></div>` : ""}
           ${r.unknown.length ? `<div class="notice">${r.unknown.length} 行学号不在本班：${esc(r.unknown.slice(0, 20).join("、"))}</div>` : ""}
-          <div class="row"><span class="spacer"></span><button class="primary" id="upGo" ${r.cells ? "" : "disabled"}>确认导入</button></div>`;
+          <div class="row"><span class="spacer"></span><button class="primary" id="upGo" ${fl.length || cf.length ? "" : "disabled"}>确认导入</button></div>`;
+        const pickAll = (v) => cf.forEach((x) => { const i = $(`input[name="upc${x.id}"][value="${v}"]`, el); if (i) i.checked = true; });
+        if (cf.length) { $("#upAllT", el).onclick = () => pickAll("table"); $("#upAllS", el).onclick = () => pickAll("system"); }
         $("#upGo", el).onclick = async () => {
+          const useTable = cf.filter((x) => $(`input[name="upc${x.id}"]:checked`, el)?.value === "table").map((x) => x.id);
           try {
-            const res = await api(`/api/classes/${C.id}/upload/commit`, { method: "POST", body: { token: r.token } });
-            $("#upRes", el).innerHTML = `<p>已导入 ${res.saved} 个单元格。</p><button id="upUndo">回退这次导入</button> <button id="upClose" class="primary">完成</button>`;
+            const res = await api(`/api/classes/${C.id}/upload/commit`, { method: "POST", body: { token: r.token, use_table: useTable } });
+            $("#upRes", el).innerHTML = `<p>已写入 ${res.saved} 格${res.kept ? `，保留平台原值 ${res.kept} 格` : ""}。</p>
+              ${res.failed.length ? `<div class="notice err">${res.failed.length} 处没写进去：${esc(res.failed.slice(0, 10).join("；"))}</div>` : ""}
+              <button id="upUndo">回退这次导入</button> <button id="upClose" class="primary">完成</button>`;
             $("#upClose", el).onclick = () => { closeModal(); viewClass(C.id); };
             $("#upUndo", el).onclick = async () => { await api(`/api/classes/${C.id}/upload/${res.batch}/revert`, { method: "POST" }); toast("已回退"); closeModal(); viewClass(C.id); };
           } catch (e2) { toast(e2.message, true); }

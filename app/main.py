@@ -604,13 +604,145 @@ def _xlsx(data: bytes, filename: str) -> Response:
 
 # ---------------------------------------------------------------- 教师整班上传（备用路径）
 
-TEMPLATE_COLS = {"student_no": ["学号"], "a_raw": ["原始成绩"], "a_status": ["状态"],
-                 "skill": ["运动技能评定", "运动技能"], "regular": ["平时成绩", "平时"]}
+def _upload_header_map(head: list[str], la: str, lb: str) -> dict:
+    """表头 → 字段。新模板状态并在成绩格里；老模板的“××原始成绩”“××状态”两列照样认。"""
+    colmap = {}
+    for i, h in enumerate(head):
+        if h == "学号":
+            colmap["student_no"] = i
+        elif h in (f"{la}原始成绩", f"{la}成绩", la):
+            colmap["a"] = i
+        elif h == f"{la}状态":
+            colmap["a_status"] = i
+        elif h in (f"{lb}原始成绩", f"{lb}成绩", lb):
+            colmap["b"] = i
+        elif h == f"{lb}状态":
+            colmap["b_status"] = i
+        elif h.startswith("运动技能"):
+            colmap["skill"] = i
+        elif h.startswith("平时"):
+            colmap["regular"] = i
+        elif h.startswith("课程成绩"):
+            colmap["course_status"] = i
+    return colmap
+
+
+def _upload_cell(v):
+    if v is None:
+        return None
+    v = importer.clean(v) if not isinstance(v, (int, float)) else v
+    return None if v == "" else v
+
+
+def _num_text(v) -> str:
+    return "" if v is None else f"{v:g}"
+
+
+def _upload_units(row: dict, cells: dict, cfg: dict) -> tuple[list[dict], list[dict]]:
+    """把一行表里的值拆成要比较的格子。
+
+    每个格子：label、sys（平台显示的文字，空串表示平台里没有）、new（表里的文字）、ops（选“用表里的”时要写的字段，
+    状态在前）、better（两边都是成绩时，平台的是否更好）。表里和平台一样的格子不返回。
+    格子和平台录入表一致：两项体测各一格（成绩或特殊情况）；运动技能、平时成绩各一格，课程成绩特殊情况显示在这两格里。
+    """
+    vals, units, errors = row["values"], [], []
+    gender = row["gender_code"]
+    labels = {"a": cfg["slots"][0].get("label", "项目一"), "b": cfg["slots"][1].get("label", "项目二"),
+              "skill": "运动技能评定", "regular": "平时成绩"}
+
+    def parse(f, v):
+        try:
+            return services.parse_cell(f, v, cfg, gender)
+        except scoring.ParseError as e:
+            key = f[0] if f in ("a_raw", "b_raw", "a_status", "b_status") else f
+            errors.append({"field": labels.get(key, "课程成绩"), "value": str(v), "error": str(e)})
+            return None
+
+    # 两项体测：一格里写成绩或特殊情况
+    for k in ("a", "b"):
+        raw, st = cells.get(k), cells.get(f"{k}_status")
+        text = None if raw is None else scoring.normalize_status(str(raw).strip())
+        if text in scoring.STATUSES:          # 成绩格里写的是特殊情况（新模板）
+            st, raw = text, None
+        elif st is not None:
+            st = parse(f"{k}_status", st)
+            if st is None:
+                continue
+        if st == "正常" and raw is None:
+            st = None                          # 老模板状态写“正常”、成绩空着：不算改动
+        if st is None and raw is None:
+            continue
+        sys_st = vals.get(f"{k}_status") or "正常"
+        sys_raw = vals.get(f"{k}_raw")
+        sys_text = sys_st if sys_st != "正常" else row["display"][k]["raw_text"]
+        if st is not None and st != "正常":
+            if st == sys_st:
+                continue
+            units.append({"label": labels[k], "sys": sys_text, "new": st, "better": False,
+                          "ops": [(f"{k}_status", st)]})
+            continue
+        val = parse(f"{k}_raw", raw)
+        if val is None:
+            continue
+        if sys_st == "正常" and val == sys_raw:
+            continue
+        better = False
+        if sys_st == "正常" and sys_raw is not None:
+            item = next(s for s in cfg["slots"] if s["key"] == k)["items"][gender]
+            better = score_import.better(item, sys_raw, val)
+        ops = ([(f"{k}_status", "正常")] if sys_st != "正常" else []) + [(f"{k}_raw", raw)]
+        units.append({"label": labels[k], "sys": sys_text, "new": str(raw), "better": better, "ops": ops})
+
+    # 课程成绩特殊情况写在运动技能、平时成绩格里
+    sys_course = vals.get("course_status") or "正常"
+    course = cells.get("course_status")
+    if course is not None:                     # 未发布过的过渡版式里单独一列
+        course = parse("course_status", str(course).strip())
+    texts = {f: cells.get(f) for f in ("skill", "regular")}
+    in_cells = {str(v).strip() for v in texts.values()
+                if isinstance(v, str) and str(v).strip() in scoring.COURSE_STATUSES and str(v).strip() != "正常"}
+    if len(in_cells) > 1:
+        errors.append({"field": "课程成绩", "value": "、".join(sorted(in_cells)),
+                       "error": "运动技能和平时成绩两格写了不同的课程成绩特殊情况"})
+        return [], errors
+    if in_cells:
+        c = in_cells.pop()
+        others = [f for f, v in texts.items() if v is not None and str(v).strip() != c]
+        if others:
+            errors.append({"field": labels[others[0]], "value": str(texts[others[0]]),
+                           "error": f"课程成绩是“{c}”时这一格不用填成绩，和另一格一样写“{c}”或留空"})
+            return [], errors
+        course, texts = c, {}
+    if course is not None and course != sys_course:
+        units.append({"label": "课程成绩", "sys": "" if sys_course == "正常" else sys_course, "new": course,
+                      "better": False, "ops": [("course_status", course)]})
+    for f, v in texts.items():
+        if v is None:
+            continue
+        val = parse(f, v)
+        if val is None:
+            continue
+        cur = vals.get(f)
+        if sys_course != "正常" and course in (None, sys_course):
+            # 平台里这一格显示的是课程成绩特殊情况，表里填了成绩：选表里的就把课程成绩改回正常
+            units.append({"label": labels[f], "sys": sys_course, "new": _num_text(val), "better": False,
+                          "ops": [("course_status", "正常"), (f, v)]})
+            continue
+        if val == cur:
+            continue
+        units.append({"label": labels[f], "sys": _num_text(cur), "new": _num_text(val),
+                      "better": cur is not None and cur > val, "ops": [(f, v)]})
+    return units, errors
 
 
 @app.post("/api/classes/{cid}/upload")
 async def upload_scores(cid: int, file: UploadFile = File(...), u: User = Depends(current_user),
                         db: Session = Depends(get_db)):
+    """预检整班上传。平台里空着的格子直接写；平台里有、和表里不一样的列出来让老师逐格选；一样的不显示。
+
+    模板第 2 行是示例（学号格写“示例”），学生名单下面是填写说明（以“填写说明”开头的一行起），都跳过；
+    老模板（第 2 行起就是学生、体测状态单独成列）照样能传。
+    """
     c, sem = _class(db, cid, u)
     ok, why = services.can_edit(c, sem)
     if not ok:
@@ -626,61 +758,45 @@ async def upload_scores(cid: int, file: UploadFile = File(...), u: User = Depend
         raise HTTPException(400, "文件是空的")
     head = [importer.clean(h) for h in rows[0]]
     cfg = services.class_config(c, sem)
-    la, lb = cfg["slots"][0].get("label", "项目一"), cfg["slots"][1].get("label", "项目二")
-    colmap = {}
-    for i, h in enumerate(head):
-        if h == "学号":
-            colmap["student_no"] = i
-        elif h == f"{la}原始成绩":
-            colmap["a_raw"] = i
-        elif h == f"{la}状态":
-            colmap["a_status"] = i
-        elif h == f"{lb}原始成绩":
-            colmap["b_raw"] = i
-        elif h == f"{lb}状态":
-            colmap["b_status"] = i
-        elif h.startswith("运动技能"):
-            colmap["skill"] = i
-        elif h.startswith("平时"):
-            colmap["regular"] = i
+    colmap = _upload_header_map(head, cfg["slots"][0].get("label", "项目一"), cfg["slots"][1].get("label", "项目二"))
     if "student_no" not in colmap:
         raise HTTPException(400, "找不到“学号”列，请使用平台下载的模板")
     roster = {r["student_no"]: r for r in services.load_class_rows(db, c, sem)}
-    changes, errors, unknown = [], [], []
+    fills, conflicts, errors, unknown = [], [], [], []
     for n, r in enumerate(rows[1:], start=2):
         sno = importer.clean(r[colmap["student_no"]]) if colmap["student_no"] < len(r) else ""
-        if not sno:
+        if sno.startswith("填写说明"):
+            break  # 名单下面的填写说明
+        if not sno or sno == "示例":
             continue
         row = roster.get(sno)
         if not row:
             unknown.append(f"第{n}行 {sno}")
             continue
-        for f, i in colmap.items():
-            if f == "student_no" or i >= len(r):
-                continue
-            v = r[i]
-            if v is None or importer.clean(v) == "":
-                continue
-            v = importer.clean(v) if not isinstance(v, (int, float)) else v
-            try:
-                services.parse_cell(f, v, cfg, row["gender_code"])
-            except scoring.ParseError as e:
-                errors.append({"row": n, "student_no": sno, "name": row["name"], "field": f, "value": str(v),
-                               "error": str(e)})
-                continue
-            changes.append({"enrollment_id": row["enrollment_id"], "field": f, "value": v,
-                            "student_no": sno, "name": row["name"]})
+        cells = {f: _upload_cell(r[i]) for f, i in colmap.items() if f != "student_no" and i < len(r)}
+        units, errs = _upload_units(row, {f: v for f, v in cells.items() if v is not None}, cfg)
+        errors += [{"row": n, "student_no": sno, "name": row["name"], **e} for e in errs]
+        for x in units:
+            x.update(row=n, student_no=sno, name=row["name"], enrollment_id=row["enrollment_id"])
+            if x["sys"] == "":
+                fills.append(x)
+            else:
+                x["id"] = len(conflicts)
+                x["default"] = "system" if x["better"] else "table"
+                conflicts.append(x)
     token = uuid.uuid4().hex
     (importer.UPLOAD_DIR / f"scores-{token}.json").write_text(
-        __import__("json").dumps({"class_id": c.id, "changes": changes}, ensure_ascii=False))
-    touched = len({ch["enrollment_id"] for ch in changes})
-    return {"token": token, "cells": len(changes), "students": touched, "errors": errors, "unknown": unknown,
-            "roster": len(roster)}
+        __import__("json").dumps({"class_id": c.id, "fills": fills, "conflicts": conflicts}, ensure_ascii=False))
+    public = lambda xs: [{k: v for k, v in x.items() if k not in ("ops", "enrollment_id", "better")} for x in xs]
+    return {"token": token, "fills": public(fills), "conflicts": public(conflicts),
+            "students": len({x["enrollment_id"] for x in fills + conflicts}),
+            "errors": errors, "unknown": unknown, "roster": len(roster)}
 
 
 @app.post("/api/classes/{cid}/upload/commit")
-def upload_commit(cid: int, request: Request, token: str = Body(..., embed=True), u: User = Depends(current_user),
-                  db: Session = Depends(get_db)):
+def upload_commit(cid: int, request: Request, token: str = Body(...), use_table: list[int] | None = Body(None),
+                  u: User = Depends(current_user), db: Session = Depends(get_db)):
+    """写入：平台里空着的格子全部写；不一致的格子只写 use_table 里列出的（不传就按预检的默认选择）。"""
     import json
     c, sem = _class(db, cid, u)
     ok, why = services.can_edit(c, sem)
@@ -694,13 +810,19 @@ def upload_commit(cid: int, request: Request, token: str = Body(..., embed=True)
     payload = json.loads(p.read_text())
     if payload["class_id"] != c.id:
         raise HTTPException(400)
+    chosen = set(use_table) if use_table is not None else {x["id"] for x in payload["conflicts"]
+                                                          if x["default"] == "table"}
+    units = payload["fills"] + [x for x in payload["conflicts"] if x["id"] in chosen]
+    changes = [{"enrollment_id": x["enrollment_id"], "field": f, "value": v} for x in units for f, v in x["ops"]]
     batch = f"imp-{token[:12]}"
-    res = services.save_cells(db, c, sem, payload["changes"], u.staff_no, batch=batch)
+    res = services.save_cells(db, c, sem, changes, u.staff_no, batch=batch)
     services.log(db, u.staff_no, "导入", f"{c.class_no} {c.class_name}", sem.id, ip=client_ip(request),
-                 batch=batch, cells=len(payload["changes"]))
+                 batch=batch, cells=len(units))
     db.commit()
     p.unlink(missing_ok=True)
-    return {"ok": True, "batch": batch, "saved": len([r for r in res["results"] if r.get("ok")])}
+    failed = [r for r in res["results"] if not r.get("ok")]
+    return {"ok": True, "batch": batch, "saved": len(units), "kept": len(payload["conflicts"]) - len(chosen & {
+        x["id"] for x in payload["conflicts"]}), "failed": [r.get("error") for r in failed]}
 
 
 @app.post("/api/classes/{cid}/upload/{batch}/revert")
